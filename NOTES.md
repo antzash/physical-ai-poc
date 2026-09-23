@@ -122,3 +122,47 @@ nominal poses: 16/16 complete and end inside the target slot volume (12–15 s p
 - **Known limitation, stated in the module docstring:** a hash chain cannot detect truncation of the newest records.
   A deployment would anchor the head hash externally (e.g. periodic signed checkpoints).
 - `scripts/slots.py`: first-free allocation behind `choose_slot()`, so a case/class/hazard policy can replace it.
+
+## M4 — Domain randomisation and the episode loop
+
+`python3 scripts/episode.py --episodes 10 --seed 0 --render` → **10/10 succeeded**, 50 custody events, chain intact.
+Start/end frames per episode in `out/m4_ep*_{start,end}.png`; a new `cabinet_cam` confirms flat items lie inside
+the bins (they are hidden behind the 10 cm bin walls from `demo_cam`).
+
+### Randomisation (all from one seeded Generator; the seed is recorded in the result and the REGISTERED event)
+- Class: uniform over the four. Inactive items: parked at z = −3 (below the floor), velocities zeroed, collisions
+  disabled (`contype/conaffinity = 0`) and `gravcomp = 1` so they neither fall nor collide.
+- Size: per-axis scale ≈ 0.7–1.3 of nominal, with the gripper-closing axis capped (box ≤ 1.2, bag ≤ 1.05,
+  folder ≤ 1.1) so every item fits the 80 mm stroke, and long axes capped to fit a 245 mm bin.
+  Bags are additionally kept flatter than they are wide (height ≤ 0.85 × width).
+- Mass (kg): box 0.10–0.80, bag 0.05–0.60, cylinder 0.15–0.90, folder 0.05–0.40. Inertia recomputed analytically.
+- Friction: sliding 0.6–1.4 on the item. **Items have contact `priority=1`**, so this is the coefficient actually
+  used against the pads and the counter; with MuJoCo's default max-combination the 1.5 pads would always win and
+  friction randomisation would be a no-op.
+- Pose: x 0.40–0.60, y −0.25–0.05, yaw uniform over the full circle.
+- Key light: direction, position, overall intensity (0.8–1.2) and a slight per-channel tint (0.95–1.05).
+
+### Bugs found by looking, and fixed
+1. **Stale collision bounds after resizing.** First 10-episode run: 5/10. Rendering showed a 14 cm bottle
+   *knocked over before the gripper arrived*; tracing showed the bottle bouncing up to 0.3 m during the pre-cycle
+   settle. Diffing the in-place-mutated model against one compiled with the same size found `bvh_aabb` (the body's
+   bounding volume used by the collision midphase) still holding the nominal box, so enlarged items sank into the
+   counter and were ejected. Fix: update `bvh_aabb` and `dof_length` alongside `geom_size/rbound/aabb`. This also
+   explained two folder failures (pad contacts culled). Spawn test: 199/200 seeds now still within 1.1 mm.
+2. **Bag standing on edge.** The remaining unstable spawn was an ellipsoid taller than wide, which rolls over;
+   fixed by the flatness constraint above.
+3. **Bag rocking forever.** Two episodes failed VERIFY ("not at rest"): position fixed to the millimetre but
+   rocking/spinning at ~0.6 rad/s for > 5 s — a rigid-ellipsoid artefact. Rather than relax the at-rest check, the
+   bag geom now has torsional and rolling friction (`condim=6`, `friction="… 0.05 0.01"`) standing in for the energy
+   a deformable bag dissipates.
+
+Before these fixes, the failures were logged correctly (e.g. `FAILED  CLOSE: gripper closed on nothing`,
+`FAILED  TRANSIT: item dropped during TRANSIT (lost two-finger contact)`, `FAILED  VERIFY: post-settle check
+failed: not at rest`), with no PLACED/VERIFIED written after a failure.
+
+### Episode semantics
+- SUBMITTED (OFFICER:<badge>) → REGISTERED (SYSTEM, slot + seed + size) → PICKED (ROBOT, on `grasp_ok` after LIFT)
+  → PLACED (ROBOT, on release with the item over the slot footprint) → VERIFIED (SYSTEM, after 1 s: item centre
+  inside the slot volume, linear speed < 1 cm/s and angular < 0.2 rad/s). Any failure → FAILED with phase + reason.
+- Only one item is physically present per episode; slot occupancy is tracked logically across episodes (so all
+  four slots are exercised) and cleared when all four are full. A failed episode frees its slot.

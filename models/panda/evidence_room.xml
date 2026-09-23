@@ -28,7 +28,7 @@
     <material name="intake_mat" rgba="0.95 0.75 0.15 1"/>
     <material name="cabinet_body" rgba="0.22 0.29 0.38 1" specular="0.2"/>
     <material name="cabinet_panel" rgba="0.30 0.40 0.52 1" specular="0.2"/>
-    <material name="slot_floor" rgba="0.62 0.66 0.70 1"/>
+    <material name="slot_floor" rgba="0.40 0.43 0.47 1"/>
   </asset>
 
   <default>
@@ -36,7 +36,9 @@
       <geom type="box" contype="1" conaffinity="1" condim="3" friction="0.8 0.005 0.0001"/>
     </default>
     <default class="item">
-      <geom condim="4" friction="1.2 0.02 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001"/>
+      <!-- priority 1 makes the item's (randomised) friction govern its contacts, including with the finger pads;
+           with equal priorities MuJoCo takes the max, which would make friction randomisation a no-op. -->
+      <geom condim="4" priority="1" friction="1.2 0.02 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001"/>
     </default>
     <default class="slot">
       <site type="box" group="4" rgba="0.2 0.9 0.4 0.15"/>
@@ -97,8 +99,10 @@
     </body>
     <body name="item_bag" pos="0.62 0.0 0.025">
       <freejoint name="item_bag_joint"/>
+      <!-- A soft bag modelled as a rigid ellipsoid would rock and spin almost undamped; torsional and rolling
+           friction (condim 6) stand in for the energy a deformable bag dissipates on contact. -->
       <geom name="item_bag_geom" class="item" type="ellipsoid" size="0.08 0.032 0.025" mass="0.15"
-        rgba="0.55 0.75 0.95 0.9"/>
+        condim="6" friction="1.2 0.05 0.01" rgba="0.55 0.75 0.95 0.9"/>
     </body>
     <body name="item_cylinder" pos="0.40 -0.30 0.055">
       <freejoint name="item_cylinder_joint"/>
@@ -116,5 +120,6 @@
 
     <camera name="demo_cam" pos="1.75 -1.25 1.2" mode="targetbody" target="demo_target" fovy="42"/>
     <camera name="topdown_cam" pos="0.5 -0.12 1.9" xyaxes="0 -1 0 1 0 0" fovy="22"/>
+    <camera name="cabinet_cam" pos="0.3 0.22 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
   </worldbody>
 </mujoco>

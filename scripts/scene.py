@@ -19,6 +19,7 @@ GRIPPER_CLOSED = 0.0
 
 ITEM_CLASSES = ["box", "bag", "cylinder", "folder"]
 SLOT_NAMES = [f"slot_{i}" for i in range(4)]
+COUNTER_TOP_Z = 0.0
 
 # Flange-to-fingertip-pad offset in the hand frame (Franka's standard TCP offset).
 TCP_OFFSET = 0.1034

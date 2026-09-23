@@ -21,7 +21,6 @@ PHASES = ["HOME", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRANSIT", "INSERT", "
 FINGERTIP_BELOW_TCP = 0.0089
 HAND_ABOVE_TCP = 0.0374
 
-COUNTER_TOP_Z = 0.0
 TIP_CLEARANCE = 0.004  # fingertips stay this far above the counter at the grasp pose
 HAND_CLEARANCE = 0.006  # hand body stays this far above a tall item's top at the grasp pose
 PREGRASP_CLEARANCE = 0.10  # TCP height above the item's top for APPROACH
@@ -279,7 +278,7 @@ class PickPlaceController:
             desired = top - 0.006  # pinch near the top face
         else:
             desired = center  # box: centre; bag: widest section; cylinder: mid-height if the hand allows
-        floor_limit = COUNTER_TOP_Z + FINGERTIP_BELOW_TCP + TIP_CLEARANCE
+        floor_limit = scene.COUNTER_TOP_Z + FINGERTIP_BELOW_TCP + TIP_CLEARANCE
         hand_limit = top + HAND_CLEARANCE - HAND_ABOVE_TCP  # hand body must stay above the item's top
         return max(desired, floor_limit, hand_limit)
 
