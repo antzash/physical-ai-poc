@@ -1,5 +1,39 @@
 # NOTES — running log of decisions, failures, open items
 
+## Status at the end of Phase 0 (M0–M7 complete)
+
+**Works, verified by rendering, by numbers, or both:**
+- The scene loads and renders headless. Nothing intersects, and items rest stably after randomisation
+  (199/200 spawn test before the bag flatness constraint; that one bag case is fixed).
+- Scripted, contact-physics pick-and-place for all 4 classes into all 4 slots. No weld and no kinematic grasp,
+  anywhere in the code.
+- The hash-chained custody log: 8 tamper tests pass (edit, re-hashed forgery, deletion, reordering, refusal to
+  append to a broken chain).
+- Domain randomisation with exact replay from a seed and slot (verified bit-for-bit).
+- Evaluation: **1000/1000 episodes, 95% CI [99.6%, 100%]**, and 100/100 on a second seed range, under the conditions
+  listed in M5. In short: ground-truth state, in-distribution, scripted controller, simulation only.
+- Demo video `out/demo.mp4` (85.7 s) with the live custody panel. The final episode is a labelled fault injection.
+- The RL environment passes `check_env`, a scripted policy solves it through the action space 60/60, and SAC/PPO
+  smoke runs checkpoint and reload.
+
+**Not done, or not verified:**
+- No learned policy. RL was a smoke test only, by design (M7 has the compute estimate).
+- No perception. Every success number uses ground-truth item pose.
+- The interactive viewer (`mjpython scripts/simulation.py`) was not opened during the build, because the build had
+  no GUI session. Only the `--headless` path is verified.
+- No robustness sweep yet: no pose noise and no out-of-distribution sizes, masses or poses.
+- Sim-to-real is not addressed.
+
+**Recurring lesson:** MuJoCo's pad contacts between the Panda finger boxes and items flicker. One pad can vanish from
+the active contact set for a physics step while the item is plainly held. Any grasp or hold predicate must be
+evaluated over a time window, never at a single instant. This caused every false failure in M5 and M7.
+
+**Open items / next steps:** pose-noise and out-of-distribution evaluation; a perception stage; GPU-parallel
+simulation (MJX / Warp) with demo-bootstrapped RL; multiple physical items so the cabinet visibly fills up; and a
+policy for allocating slots by case, item class or hazard category.
+
+---
+
 ## M0 — Dependencies and robot model
 
 - MuJoCo 3.13.0, NumPy 2.4.3, Python 3.13.5 on Apple Silicon (M2), CPU only.
