@@ -23,6 +23,11 @@ SLOT_NAMES = [f"slot_{i}" for i in range(4)]
 # Flange-to-fingertip-pad offset in the hand frame (Franka's standard TCP offset).
 TCP_OFFSET = 0.1034
 PAD_FRICTION = [1.5, 0.05, 0.0001]
+# Gripper servo stiffness/damping on the `split` tendon (N/m, N*s/m). Menagerie ships kp=100, which squeezes only
+# ~1.4 N per pad and cannot lift 0.5 kg; the real Franka Hand is rated 70 N continuous. kp=1500 gives ~21 N per pad
+# on a 56 mm item (see NOTES.md, M2). The ctrl mapping (0 = closed, 255 = 0.04 m open) is unchanged.
+GRIPPER_KP = 1500.0
+GRIPPER_KV = 120.0
 
 _OBJ = mujoco.mjtObj
 
@@ -32,6 +37,16 @@ def build_spec(path=SCENE_XML):
     spec.body("hand").add_site(
         name="tcp", pos=[0, 0, TCP_OFFSET], size=[0.006, 0, 0], rgba=[1, 0.1, 0.1, 0.8], group=4
     )
+    # The real Franka compensates gravity in its joint controller; the Menagerie position servos do not, and sag
+    # ~7 mm at the TCP under their own weight. Model the robot's internal compensation on the arm bodies only
+    # (never on items, which must be carried by contact forces).
+    for body_name in [f"link{i}" for i in range(1, 8)] + ["hand"] + FINGER_BODIES:
+        spec.body(body_name).gravcomp = 1.0
+    grip = spec.actuator(GRIPPER_ACTUATOR)
+    gain, bias = list(grip.gainprm), list(grip.biasprm)
+    gain[0] = GRIPPER_KP * 0.04 / GRIPPER_OPEN
+    bias[1], bias[2] = -GRIPPER_KP, -GRIPPER_KV
+    grip.gainprm, grip.biasprm = gain, bias
     for body_name in FINGER_BODIES:
         for geom in spec.body(body_name).geoms:
             if geom.contype or geom.conaffinity:

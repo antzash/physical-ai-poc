@@ -72,3 +72,36 @@ sites visible) and inspecting them; numerically, after 2 s of physics all four i
 
 - Interactive viewer: `mujoco.viewer.launch_passive` needs `mjpython` on macOS, and could not be exercised from this
   headless build session. Only the `--headless` path has been verified.
+
+## M2 — IK and scripted pick-and-place
+
+Verified by `python3 scripts/controller.py` (item_box at its fixed scene pose → `slot_0`), which writes one frame
+per phase to `out/m2_*.png`; inspected as a contact sheet. The box is carried purely by pad contact forces
+(~19–23 N per pad) and comes to rest inside `slot_0`. Additionally, all 16 class × slot combinations were run at
+nominal poses: 16/16 complete and end inside the target slot volume (12–15 s per cycle).
+
+### Gripper geometry (measured from the Menagerie collision meshes, TCP frame, z down)
+- Fingertips extend 8.9 mm below the TCP; pads span ±9 mm about it; open pad gap 80 mm.
+- Hand body starts 37.4 mm above the TCP and is 208 mm wide along the finger axis, 63 mm across it.
+- Consequence: the hand cannot enter a 145 mm bin, so items are released with the hand just above the bin walls
+  (drop of up to ~6 cm for flat items). This is the release height the controller computes, not a guess.
+
+### Decisions / fixes
+- **Gravity compensation on the arm bodies** (`gravcomp=1` on link1–7, hand, fingers — never on items). Without it
+  the Menagerie position servos sag ~7 mm at the TCP. The real Franka compensates gravity in its controller.
+- **Gripper stiffness raised from kp=100 to kp=1500 (kv 10→120).** Measured failure first: at stock gains the grip
+  is ~1.4 N per pad and the box slips out on LIFT at 0.5 kg and 0.9 kg (`grasp not verified`). At kp=1500 the grip
+  is ~21 N per pad (~42 N total, within the real Franka Hand's 70 N continuous rating) and a 0.9 kg box completes.
+  The ctrl mapping (0 closed … 255 open) is unchanged; ctrl 0 is commanded, i.e. a genuinely closed target.
+- **Back-row collision.** First run: every insert into `slot_2`/`slot_3` timed out. Contact inspection showed the
+  hand and right finger hitting `cab_back` (the hand is 208 mm wide along world y at the slot). Fix: the bin's back
+  wall is now 0.10 m like the others, and the tall backboard is set 50 mm further back on an extended base.
+- **No weld / kinematic grasp anywhere.** No `--kinematic-grasp` flag exists; it was not needed.
+- The cylinder is grasped as close to mid-height as the hand allows (hand body 6 mm above the bottle top), which
+  for the nominal 11 cm bottle is ~2 cm above its centre.
+- Motion: Cartesian straight-line segments with smoothstep timing, IK solved every 4 physics steps (125 Hz),
+  warm-started from the previous solution. Transit goes up to TCP z = 0.30 before moving over the cabinet.
+- Phase completion is measured (TCP within 6 mm of goal, fingers settled or both pads > 2 N, fingers open and no
+  pad contact, etc.) with a per-phase timeout that ends the cycle as a failure attributed to that phase.
+- `grasp_ok`: item in contact with **both** finger bodies (> 0.1 N each) **and** lifted ≥ 4 cm above its resting
+  height. A drop is declared after ~0.2 s without two-finger contact while carrying.

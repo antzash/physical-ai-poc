@@ -62,15 +62,17 @@
 
     <!--
       Cabinet: a 2x2 grid of open-topped storage bins on a base unit, to the arm's left (+y).
-      Built from thin static boxes: floor, back panel, front wall, two side walls, one divider along x
+      Built from thin static boxes: floor, back wall, front wall, two side walls, one divider along x
       (the "vertical divider") and one along y (the "shelf"). There is deliberately no top panel:
       a closed top with a horizontal shelf would make top-down insertion into the lower row impossible.
       Each bin interior is 0.245 m (x) by 0.145 m (y) by 0.10 m deep.
     -->
     <body name="cabinet" pos="0.3 0.4 0">
-      <geom name="cab_base" class="static" pos="0 0 -0.4" size="0.27 0.17 0.4" material="cabinet_body"/>
+      <geom name="cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
       <geom name="cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
-      <geom name="cab_back" class="static" pos="0 0.165 0.15" size="0.27 0.005 0.15" material="cabinet_panel"/>
+      <geom name="cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
+      <!-- Tall backboard, set back from the bins so the 0.21 m-wide Panda hand clears it over the rear slots. -->
+      <geom name="cab_backboard" class="static" pos="0 0.215 0.15" size="0.27 0.005 0.15" material="cabinet_panel"/>
       <geom name="cab_front" class="static" pos="0 -0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
       <geom name="cab_side_l" class="static" pos="-0.265 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
       <geom name="cab_side_r" class="static" pos="0.265 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
