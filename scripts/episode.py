@@ -65,8 +65,11 @@ class IntakeStation:
         self.randomiser = Randomiser(model)
         self.episode_index = 0
 
-    def run_episode(self, seed, object_class=None, frame_cb=None):
-        """Run one intake. frame_cb(station, controller_or_None) is called after every physics step."""
+    def run_episode(self, seed, object_class=None, frame_cb=None, slot=None):
+        """Run one intake. frame_cb(station, controller_or_None) is called after every physics step.
+
+        `slot` forces the target slot (for exact replay of an evaluation episode: same seed + same slot).
+        """
         m, d = self.m, self.d
         ep = self.episode_index
         self.episode_index += 1
@@ -89,11 +92,12 @@ class IntakeStation:
         size_txt = "x".join(f"{2 * v * 100:.1f}" for v in params.size)
         self.log.append(officer(badge), "SUBMITTED", item_id, case_id, cls,
                         detail=f"presented at intake counter; {params.mass * 1000:.0f} g")
-        try:
-            slot = self.alloc.allocate(item_id, cls)
-        except CabinetFull:
-            self.alloc.reset()
-            slot = self.alloc.allocate(item_id, cls)
+        if slot is None:
+            try:
+                slot = self.alloc.allocate(item_id, cls)
+            except CabinetFull:
+                self.alloc.reset()
+                slot = self.alloc.allocate(item_id, cls)
         self.log.append(SYSTEM_ACTOR, "REGISTERED", item_id, case_id, cls, slot,
                         detail=f"allocated {slot}; seed {seed}; size(cm) {size_txt}")
 
@@ -178,6 +182,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="episode i uses seed + i")
     parser.add_argument("--log", default=str(scene.OUT_DIR / "custody_log.jsonl"))
     parser.add_argument("--render", action="store_true", help="save start/end frames to out/m4_*.png")
+    parser.add_argument("--slot", choices=scene.SLOT_NAMES, help="force the target slot (exact replay)")
     args = parser.parse_args()
 
     station = IntakeStation(args.log)
@@ -192,7 +197,7 @@ def main():
             if renderer is not None and c is not None and "start" not in snaps:
                 snaps["start"] = scene.render(st.m, st.d, renderer=renderer)
 
-        res = station.run_episode(seed, frame_cb=cb)
+        res = station.run_episode(seed, frame_cb=cb, slot=args.slot)
         if renderer is not None:
             scene.save_png(snaps["start"], scene.OUT_DIR / f"m4_ep{i:02d}_start.png")
             scene.save_png(scene.render(station.m, station.d, renderer=renderer),
