@@ -209,3 +209,26 @@ Wall time ≈ 0.39 s per episode on the M2 Air.
 - Exact replay verified: re-running evaluation episodes in isolation with the recorded seed and slot reproduces
   cycle time, placement error and parameters bit-for-bit.
 - The 19.1 mm max placement error is a cylinder that landed off-centre but inside the slot volume and at rest.
+
+## M6 — Demo video
+
+`python3 scripts/record.py` → `out/demo.mp4`: **85.7 s, 1280×720, 30 fps, H.264/yuv420p, ~16 MB**; decodes
+cleanly with ffmpeg. Verified by extracting stills across the whole video and inspecting them.
+
+- Left 860 px: `demo_cam` rendered offscreen at 1280×720 and cropped, 1× simulated time, with a `cabinet_cam` inset
+  so flat items are visibly filed. Overlay states: simulation, contact-physics grasping only, and that only one item
+  is simulated per episode (the cabinet resets between episodes, so earlier items are not shown).
+- Right 420 px: live custody panel drawn from the real log as it is written — current item/case/class/slot/robot
+  phase, the last five events (action badge, actor, timestamp, detail, own hash ← prev hash), newest highlighted,
+  and a footer that re-runs `verify_file()` whenever the log grows.
+- Episodes: natural (unforced) seeds 1007 box → slot_0, 1008 bag → slot_1, 1002 cylinder → slot_2,
+  1001 folder → slot_3, 1004 cylinder → slot_0 — all succeed.
+- **Episode 6 is a deliberate, on-screen-labelled fault injection** (seed 1097, a 0.80 kg box): the gripper is
+  reset to Menagerie's stock kp=100 (~7% of the tuned grip force). The grasp fails at LIFT, and `FAILED … LIFT: grasp
+  not verified` is written and highlighted. The measured success rate is ~100%, so there is no natural failure to
+  show; this demonstrates failure *handling*, and is labelled as injected, not presented as a real failure.
+- Log timestamps are wall-clock at write time; rendering runs slower than real time, so gaps between timestamps
+  are longer than the corresponding 1× video time.
+- Fixes found by inspecting stills: slot field read the wrong key; the ✓ glyph is missing from Helvetica (now
+  drawn); the item card showed the previous item for 0.3 s at each episode start; the red banner overlapped the
+  inset; the post-episode hold frame predated the VERIFIED event.
