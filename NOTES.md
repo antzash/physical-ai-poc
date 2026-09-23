@@ -232,3 +232,50 @@ cleanly with ffmpeg. Verified by extracting stills across the whole video and in
 - Fixes found by inspecting stills: slot field read the wrong key; the ✓ glyph is missing from Helvetica (now
   drawn); the item card showed the previous item for 0.3 s at each episode start; the red banner overlapped the
   inset; the post-episode hold frame predated the VERIFIED event.
+
+## M7 — RL scaffold (smoke test only)
+
+Dependencies (`requirements-rl.txt`): gymnasium 1.3.0, stable-baselines3 2.9.0, torch 2.14.0 (CPU used; MPS is
+available but pointless for small MLPs).
+
+### `rl/env.py` — `EvidenceIntakeEnv`
+- Action `Box[-1,1]^5`: TCP (dx, dy, dz, dyaw) ≤ 1 cm / 0.1 rad per step + gripper open/close; the DLS IK maps the
+  Cartesian target to joint servos. 20 Hz control (25 physics steps per env step), 400-step (20 s) episodes.
+- Observation (27-D, state only): TCP position and yaw, gripper opening and command, item position relative to TCP,
+  item relative yaw (doubled, for the gripper's half-turn symmetry) and tilt, item size, class one-hot, slot centre
+  relative to TCP and to item, two-finger contact flag.
+- Reward: −distance(TCP→item) until first grasp; +5 on first held-and-lifted; −2·distance(item→slot) while held;
+  +50 on the item released, inside the slot volume and at rest; −10 on a drop or the item leaving the workspace;
+  −0.01 per step. Termination: success, drop, out-of-workspace; truncation at the step limit.
+- The same domain randomisation as the episode loop (M4); a random slot per episode.
+
+### Verification
+- `gymnasium.utils.env_checker.check_env` and `stable_baselines3.common.env_checker.check_env`: **pass** (only the
+  standard warning about an unbounded observation Box).
+- Random actions (5 episodes): returns −117 … −173, per-step reward −0.52 … −0.15 (finite, non-constant).
+- **Solvability check through the action interface:** a hand-written policy that acts *only* via the 5-D action
+  (`scripted_action` in `rl/env.py`) succeeds **60/60** randomised episodes, mean return −36.9 — so the reduced action
+  space, IK, success detection and reward shaping support the full task, and a good policy scores far above random.
+- **Contact flicker, again.** The scripted policy's first failures were false "drops": at one physics step one pad
+  reads 0 N and the other ~30–38 N (alternating sides) while the item rises in lock-step with the TCP — the same
+  MuJoCo pad-contact artefact as M5. "Held" is now measured over all 25 physics substeps of an env step (each finger
+  in contact ≥ 30% of them), and a drop needs 2 consecutive un-held env steps. 11/12 → 60/60.
+- `python3 rl/train.py` (SAC, 3000 steps): 12 s wall (≈ 240 steps/s incl. gradient updates), 15 episodes, returns
+  finite (mean −87), checkpoints at 1k/2k/3k + final written to `out/rl/`, final model reloaded and produces a valid
+  action. `--algo ppo --steps 4096`: ≈ 1070 steps/s, 20 episodes, checkpoints + reload OK.
+  **0 successes in both smoke runs — expected, and no trained policy is claimed.** No longer run was attempted.
+
+### What convergence would actually need (estimate, stated as such)
+- Measured here: one CPU env steps at ~650–1070 steps/s; SAC trains at ~240 steps/s on the M2 Air.
+- State-based RL on multi-stage pick-and-place with randomised objects commonly needs on the order of 10⁶–10⁷ steps
+  (off-policy) to 10⁷–10⁸ (on-policy) per run, before multiplying by seeds and hyperparameter sweeps. At the rates
+  above that is roughly 1–12 h per SAC run or a day+ per PPO run *on one core*, times 5+ seeds and several configs,
+  on a fanless laptop that thermally throttles — i.e. days to weeks. Adding vision multiplies cost by orders of
+  magnitude (rendering per step).
+- The realistic path is GPU-parallel simulation (MuJoCo MJX or MuJoCo Warp; Menagerie already ships
+  `mjx_panda.xml`) running thousands of environments on a GPU machine, which brings 10⁸ steps into hours. That is a
+  cloud-compute question rather than a code question — the kind of allocation the Enterprise Compute Initiative in
+  the funding research is meant to cover.
+- Sample-efficiency levers that don't need new compute: bootstrapping from the scripted controller (it is a free,
+  ~100% demonstrator for behaviour cloning / demo-augmented RL), curriculum over the randomisation ranges, and
+  HER-style goal relabelling for the slot target.
