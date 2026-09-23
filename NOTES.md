@@ -166,3 +166,46 @@ failed: not at rest`), with no PLACED/VERIFIED written after a failure.
   inside the slot volume, linear speed < 1 cm/s and angular < 0.2 rad/s). Any failure → FAILED with phase + reason.
 - Only one item is physically present per episode; slot occupancy is tracked logically across episodes (so all
   four slots are exercised) and cleared when all four are full. A failed episode frees its slot.
+
+## M5 — Evaluation harness
+
+`python3 scripts/evaluate.py [--episodes N] [--seed S]` → `out/eval_<ts>.json` + its own custody log + a table.
+95% intervals are Wilson score intervals (the normal approximation is meaningless near 100%).
+
+### Headline numbers (code at commit `e893af9`, MuJoCo 3.13.0, CPU only)
+
+| run | seeds | success | 95% CI | grasp slip | placement error (mean / p95 / max) | cycle time (mean / p95) |
+|---|---|---|---|---|---|---|
+| 100 episodes | 0–99 | **100/100** | [96.3%, 100%] | 0/100 | 1.3 / 3.3 / 7.7 mm | 12.6 / 13.9 s |
+| 1000 episodes | 1000–1999 | **1000/1000** | [99.6%, 100%] | 0/1000 | 1.3 / 3.5 / 19.1 mm | 12.7 / 14.2 s |
+
+Per class (1000-episode run): box 230/230 [98.4, 100], bag 258/258 [98.5, 100], cylinder 253/253 [98.5, 100],
+folder 259/259 [98.5, 100]. Per slot: 250/250 each. Failures by phase: none. Custody chain intact (5000 events).
+Wall time ≈ 0.39 s per episode on the M2 Air.
+
+### What these numbers do and do not mean — read before quoting them
+- They measure a **scripted controller with ground-truth object pose read from the simulator**. There is no
+  perception and no pose-estimation noise. This is the single biggest gap between this number and a real cell.
+- The evaluation is **in-distribution**: the randomisation ranges were chosen (M4) so every item fits the Panda
+  gripper and the bins, and the controller's per-class grasp heuristics were written for exactly these four classes.
+- One uncluttered item at a time, always resting upright/flat on the counter; no stacking, occlusion, toppled or
+  deformable items (the "bag" is a rigid ellipsoid with rolling friction).
+- It is simulation contact physics. Sim-to-real transfer is not measured here.
+- So the claim is: *under this randomisation envelope, with perfect state, the contact-physics pipeline is reliable
+  (≥ 99.6% at 95% confidence) and the evaluation, logging and replay infrastructure works*. It is not a claim about
+  real-world grasp success.
+- The obvious next measurement is the same harness with injected pose noise (e.g. σ = 5 mm / 5°) and wider or
+  out-of-distribution ranges, to find where it breaks. Not done in Phase 0.
+
+### History (kept deliberately)
+- First 1000-episode run (seeds 1000–1999, code at `19a7653` + uncommitted harness): **996/1000 (99.6%,
+  [99.0, 99.8])**, 4 failures, all at LIFT, "grasp not verified". Exact replay (`--seed/--slot`) and a force trace
+  showed all four items were plainly held (~20 N per pad, lifted ~11 cm, 7+ cm above the threshold) and that at
+  the single instant of the check one pad's contact had dropped out of MuJoCo's active set (0 N on one side, ~30 N
+  on the other — not a physical equilibrium). The verifier was a false negative, not the grasp.
+- Fix: grasp verification integrates over ~0.1 s (12 control samples): the item must be above the height threshold
+  at **every** sample and each finger in contact in ≥ 60% of samples. Negative test: with the stock kp=100 gripper
+  and a 0.9 kg, μ=0.6 box, 3/3 episodes still fail at LIFT with `contact L 0%, R 0%, above height 0%`.
+- Exact replay verified: re-running evaluation episodes in isolation with the recorded seed and slot reproduces
+  cycle time, placement error and parameters bit-for-bit.
+- The 19.1 mm max placement error is a cylinder that landed off-centre but inside the slot volume and at rest.
