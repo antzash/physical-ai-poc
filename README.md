@@ -39,6 +39,16 @@ Phase 0 proof-of-concept, in progress. Current milestone: a static MuJoCo scene 
 pip3 install -r requirements.txt
 ```
 
+The Franka Emika Panda model comes from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie) and is not committed. Fetch it with a sparse checkout:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/google-deepmind/mujoco_menagerie.git /tmp/menagerie
+cd /tmp/menagerie && git sparse-checkout set franka_emika_panda && cd -
+cp -r /tmp/menagerie/franka_emika_panda/. ./models/panda/
+```
+
+`models/panda/evidence_room.xml` (the scene) is committed and must stay beside `panda.xml` so asset paths resolve.
+
 ## Scope Note
 
 This is an early-stage proof-of-concept covering four object classes in simulation only. It does not yet include a physical robot, learned policies, or real-world deployment.
