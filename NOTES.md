@@ -105,3 +105,20 @@ nominal poses: 16/16 complete and end inside the target slot volume (12–15 s p
   pad contact, etc.) with a per-phase timeout that ends the cycle as a failure attributed to that phase.
 - `grasp_ok`: item in contact with **both** finger bodies (> 0.1 N each) **and** lifted ≥ 4 cm above its resting
   height. A drop is declared after ~0.2 s without two-finger contact while carrying.
+
+## M3 — Custody log and slot allocation
+
+- `scripts/logger.py`: JSON Lines, append-only, SHA-256 over the canonical JSON (sorted keys, compact separators)
+  of every field except `hash`; `prev_hash` is `null` for the first record. Timestamps are wall-clock UTC with
+  microseconds (the time the record was written, not simulation time).
+- Opening an existing log re-verifies it and **refuses to append to a broken chain**.
+- `python3 tests/test_custody_log.py` — 8 tests pass: clean chain verifies; an edited field is caught at that
+  record; an edit whose own hash is recomputed by the forger is caught at the *next* record; deleted and reordered
+  records are caught; appends refuse a tampered file; reopening continues the chain; allocator fills 4 slots then
+  raises `CabinetFull`.
+- `python3 scripts/logger.py --demo` writes a synthetic (no physics) two-item log to `out/custody_log_demo.jsonl`,
+  verifies it clean, then edits `slot_id` in record 3 of a copy — `verify()` returns 3.
+  `python3 scripts/logger.py --verify <file>` checks any log (exit code 1 on failure).
+- **Known limitation, stated in the module docstring:** a hash chain cannot detect truncation of the newest records.
+  A deployment would anchor the head hash externally (e.g. periodic signed checkpoints).
+- `scripts/slots.py`: first-free allocation behind `choose_slot()`, so a case/class/hazard policy can replace it.
