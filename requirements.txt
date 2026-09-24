@@ -1,2 +1,5 @@
-mujoco
+mujoco>=3.2
 numpy
+imageio
+imageio-ffmpeg
+pillow

@@ -1,0 +1,9 @@
+# Vendored robot model (reproducible via the clone commands in README.md).
+# The scene file must live beside panda.xml for asset paths to resolve, so it is un-ignored.
+models/panda/*
+!models/panda/evidence_room.xml
+
+out/
+__pycache__/
+*.pyc
+.DS_Store
