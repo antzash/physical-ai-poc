@@ -1,11 +1,15 @@
-"""One complete evidence intake episode, end to end.
+"""One complete evidence intake episode, end to end (Phase 1: scan -> route -> traverse -> verify -> file).
 
-randomise -> SUBMITTED / REGISTERED + slot allocation -> pick-and-place -> PICKED / PLACED -> settle -> VERIFIED,
-with FAILED (phase + reason) logged at the point anything goes wrong.
+This module is both the WORLD and the EVALUATOR, and it is where the identity boundary lives:
+  world:     picks the true item (a label from the pool), fills the bag according to that item's case record,
+             applies the label, logs the officer's submission (as PENDING-SCAN: the ID is unknown until read).
+  robot:     controller.PickPlaceController, given only cameras, the routing bank and the perception seam.
+  evaluator: knows the true ID and judges from ground truth whether the item ended in the location that ID routes to.
+             A misfile is an item that ends at rest in any slot other than that one. The true ID is NEVER passed to
+             the controller; if it were, the zero-misfile result would mean nothing.
 
-Simplification: only one item is physically in the scene per episode, so the cabinet is physically empty at the
-start of every episode. Slot occupancy is tracked logically across episodes by the allocator so all four slots are
-exercised; when all four are logically full the allocator is cleared (modelling the cabinet being emptied).
+Simplification (as in Phase 0): one item is physically present per episode; slot occupancy is tracked logically by
+routing.CabinetBank across episodes, and a full locker is emptied between episodes (transfer to long-term storage).
 """
 
 import argparse
@@ -15,40 +19,56 @@ import mujoco
 import numpy as np
 
 import controller as ctl
+import labels
+import routing
 import scene
 from logger import ROBOT_ACTOR, SYSTEM_ACTOR, CustodyLog, officer
 from perception import NoiseSpec, draw_error
 from randomise import Randomiser
-from slots import CabinetFull, SlotAllocator
+from scanner import Cameras
 
 SETTLE_BEFORE = 0.3  # s of physics after placing the item, before the robot starts
 SETTLE_AFTER = 1.0  # s after the cycle ends before verification
 REST_LIN_VEL = 0.01  # m/s
 REST_ANG_VEL = 0.2  # rad/s
-MAX_CYCLE_TIME = 40.0  # s of simulated time
-CARRY_PHASES = ("LIFT", "TRANSIT", "INSERT")
+MAX_CYCLE_TIME = 90.0  # s of simulated time (a refusal with a return-to-counter is the longest path)
+CARRY_PHASES = ("LIFT", "TRAVERSE", "TRANSIT", "VERIFY_SCAN", "INSERT")
 BADGES = ["4471", "2208", "3915", "5102"]
+PENDING = "PENDING-SCAN"
 
 
 @dataclass
 class EpisodeResult:
     episode: int
     seed: int
-    item_id: str
-    case_id: str
-    object_class: str
-    slot: str
-    success: bool
+    true_item_id: str  # WORLD TRUTH (evaluator only)
+    decoded_id: str | None  # what the robot read at intake (None if unread)
+    case_id: str | None
+    object_class: str  # WORLD TRUTH: the content class in the bag
+    category: str | None  # from the case record the robot looked up
+    routed_location: str | None  # where the robot decided to file it
+    correct_location: str | None  # evaluator: where the TRUE id routes, from the same occupancy
+    final_location: str | None  # ground truth: the slot volume the item is at rest in after settling, if any
+    outcome: str  # "filed", "refused", "failed"
+    success: bool  # filed and verified at the routed location
+    misfile: bool  # item at rest in a slot other than correct_location (the headline safety metric)
+    refusal_cause: str | None
     failure_phase: str | None
     failure_reason: str | None
     grasped: bool
     slipped: bool
     cycle_time: float
     placement_error: float | None
+    scan: dict
+    bank_before: list  # occupied locations before this episode (for exact replay)
     params: dict
     perception: dict  # noise spec and the episode's drawn (cached) error, for exact replay
-    final_in_slot: bool  # ground truth after settling, regardless of verdict (a failed episode can land in-slot)
-    max_carry_tilt_deg: float  # ground truth: largest bag tilt while carried (LIFT..INSERT); offset-CoM tipping
+    final_in_slot: bool  # ground truth: item at rest inside the ROUTED slot, regardless of verdict
+    max_carry_tilt_deg: float  # ground truth: largest bag tilt while carried
+
+    @property
+    def slot(self):
+        return self.routed_location
 
     def to_dict(self):
         return asdict(self)
@@ -59,86 +79,134 @@ def in_volume(point, center, half):
 
 
 class IntakeStation:
-    """Holds the model, log, allocator and randomiser that persist across episodes."""
+    """Holds the model, log, cabinet bank, cameras and randomiser that persist across episodes."""
 
     def __init__(self, log_path, echo=True, model=None, data=None):
         if model is None:
             model, data = scene.load()
         self.m, self.d = model, data
         self.log = CustodyLog(log_path, echo=echo)
-        self.alloc = SlotAllocator()
+        self.bank = routing.CabinetBank()
         self.randomiser = Randomiser(model)
+        self.cameras = Cameras(model)
         self.episode_index = 0
+        self.intake_number = 0
 
-    def run_episode(self, seed, object_class=None, frame_cb=None, slot=None, noise=NoiseSpec(), size_mult=1.0,
-                    mass_mult=1.0):
+    # ---- world side ------------------------------------------------------------------------------------------------
+
+    def _choose_item(self, seed, label):
+        """WORLD: which item arrives, which label it carries, and what the officer sealed inside."""
+        rng = np.random.default_rng([seed, 3])
+        if label is None:
+            idx = int(rng.integers(labels.POOL_SIZE))
+            material, true_id = f"label_{idx:02d}", labels.POOL_IDS[idx]
+        elif label == "damaged":
+            material, true_id = "label_damaged", labels.DAMAGED_ID
+        elif label == "unregistered":
+            material, true_id = "label_unregistered", labels.UNREGISTERED_ID
+        else:
+            material, true_id = f"label_{int(label):02d}", labels.POOL_IDS[int(label)]
+        record = routing.CASE_DB.get(true_id)
+        content = record.content_class if record else scene.ITEM_CLASSES[int(rng.integers(len(scene.ITEM_CLASSES)))]
+        return material, true_id, content
+
+    def run_episode(self, seed, frame_cb=None, noise=NoiseSpec(), size_mult=1.0, mass_mult=1.0, label=None,
+                    occupied=None, fault=None):
         """Run one intake. frame_cb(station, controller_or_None) is called after every physics step.
 
-        `slot` forces the target slot (for exact replay of an evaluation episode: same seed + same slot).
-        `noise` perturbs only the controller's observation of the item (perception.py); all judging stays on
-        ground truth. `size_mult` / `mass_mult` scale the randomisation envelope at runtime (OOD sweeps).
+        label:    None (random from the pool), a pool index, "damaged" or "unregistered".
+        occupied: list of locations to mark occupied first (exact replay of an evaluation episode).
+        fault:    "swap_label_in_transit" (test-only world fault: the label on the carried bag is replaced by another
+                  pool label after the pick, to exercise the verify-mismatch refusal).
+        noise perturbs only the controller's pose observation; size_mult / mass_mult scale the envelope (OOD).
         """
         m, d = self.m, self.d
         ep = self.episode_index
         self.episode_index += 1
-        rng = np.random.default_rng([seed, 1])  # separate stream for IDs so they never perturb physics draws
-        item_id = f"EV-2026-{seed:06d}"
-        case_id = f"CASE-26-{rng.integers(1000, 9999):04d}"
-        badge = BADGES[rng.integers(len(BADGES))]
+        self.intake_number += 1
+        badge = BADGES[int(np.random.default_rng([seed, 1]).integers(len(BADGES)))]
 
+        if occupied is not None:
+            self.bank = routing.CabinetBank()
+            for loc in occupied:
+                self.bank.reserve(loc, "REPLAY")
+        else:
+            self.bank.empty_full_cabinets()
+        bank_before = [loc for loc, who in self.bank.occupant.items() if who is not None]
+
+        material, true_id, content = self._choose_item(seed, label)
         scene.reset_home(m, d)
-        params = self.randomiser.apply(d, seed, object_class, size_mult=size_mult, mass_mult=mass_mult)
-        # Separate stream so the perception error never perturbs the physics draws: at zero noise every episode is
-        # bit-identical to Phase 0. Drawn once here and cached for the whole attempt.
+        params = self.randomiser.apply(d, seed, content, size_mult=size_mult, mass_mult=mass_mult)
+        self.randomiser.set_label(content, material)
         perception_error = draw_error(noise, np.random.default_rng([seed, 2]))
-        self.perception_error = perception_error  # exposed for display (record.py); the controller gets it below
-        cls = params.object_class
-        item_body = scene.body_id(m, scene.item_body(cls))
-        item_geom = scene.geom_id(m, scene.item_geom(cls))
+        self.perception_error = perception_error  # exposed for display (record.py)
+        item_body = scene.body_id(m, scene.item_body(content))
+
+        # Evaluator: where the TRUE id should go, from the same occupancy, without touching the real bank.
+        shadow = routing.CabinetBank()
+        shadow.occupant = dict(self.bank.occupant)
+        truth_route = routing.route(true_id, shadow)
+        correct_location = truth_route.location if truth_route.ok else None
 
         for _ in range(int(SETTLE_BEFORE / m.opt.timestep)):
             mujoco.mj_step(m, d)
             if frame_cb:
                 frame_cb(self, None)
 
-        size_txt = "x".join(f"{2 * v * 100:.1f}" for v in params.size)
-        self.log.append(officer(badge), "SUBMITTED", item_id, case_id, cls,
-                        detail=f"presented at intake counter; {params.mass * 1000:.0f} g")
-        if slot is None:
-            try:
-                slot = self.alloc.allocate(item_id, cls)
-            except CabinetFull:
-                self.alloc.reset()
-                slot = self.alloc.allocate(item_id, cls)
-        self.log.append(SYSTEM_ACTOR, "REGISTERED", item_id, case_id, cls, slot,
-                        detail=f"allocated {slot}; seed {seed}; size(cm) {size_txt}")
+        self.log.append(officer(badge), "SUBMITTED", PENDING, "PENDING", "sealed-bag",
+                        detail=f"sealed, labelled evidence bag left at the intake hatch (intake #{self.intake_number})")
 
-        state = {"placed": False, "fail_logged": False, "release_fail": None}
-        center, half = scene.slot_volume(m, d, slot)
+        st = {"decoded": None, "record": None, "location": None, "placed": False, "logged_end": False}
 
-        def fail(phase, reason):
-            state["fail_logged"] = True
-            self.log.append(ROBOT_ACTOR if phase not in ("VERIFY",) else SYSTEM_ACTOR, "FAILED", item_id, case_id,
-                            cls, slot, detail=f"{phase}: {reason}")
+        def ids():
+            rec = st["record"]
+            return (st["decoded"] or "UNREAD", rec.case_id if rec else "UNKNOWN",
+                    rec.category if rec else "sealed-bag", st["location"])
 
         def on_event(ev):
-            if ev.kind == "grasp_verified":
-                h = d.xpos[item_body][2] - params.size[-1]
-                self.log.append(ROBOT_ACTOR, "PICKED", item_id, case_id, cls, slot,
-                                detail=f"grasp verified: two-finger contact, lifted {h * 100:.1f} cm")
+            if ev.kind == "scanned":
+                st["decoded"] = ev.data["decoded"]
+            elif ev.kind == "routed":
+                st["record"], st["location"] = ev.data["record"], ev.data["location"]
+                scan = c.scan_info.get("rescan") or c.scan_info["intake"]
+                rec = st["record"]
+                self.log.append(SYSTEM_ACTOR, "REGISTERED", st["decoded"], rec.case_id, rec.category, st["location"],
+                                detail=f"barcode {st['decoded']} read by {scan['camera']} at t={scan['sim_time']:.2f}s; "
+                                       f"{rec.case_id} ({rec.category}: {rec.description}) -> {st['location']}")
+            elif ev.kind == "grasp_verified":
+                i, cs, cat, loc = ids()
+                self.log.append(ROBOT_ACTOR, "PICKED", i, cs, cat, loc, detail="grasp verified: two-finger contact")
             elif ev.kind == "released":
-                p = d.xpos[item_body]
-                if in_volume(p[:2], center[:2], half[:2]):
-                    state["placed"] = True
-                    self.log.append(ROBOT_ACTOR, "PLACED", item_id, case_id, cls, slot,
-                                    detail=f"released over {slot}")
+                i, cs, cat, loc = ids()
+                v = c.scan_info.get("verify") if c.scan_info.get("verify", {}).get("decoded") else c.scan_info.get(
+                    "verify_retry", {})
+                center, half = scene.slot_volume(m, d, loc)
+                if in_volume(d.xpos[item_body][:2], center[:2], half[:2]):
+                    st["placed"] = True
+                    self.log.append(ROBOT_ACTOR, "PLACED", i, cs, cat, loc,
+                                    detail=f"verify scan {v.get('camera')} read {v.get('decoded')} at "
+                                           f"t={v.get('sim_time', 0):.2f}s: MATCH; released into {loc}")
                 else:
-                    state["release_fail"] = "item released outside the slot footprint"
-                    fail("RELEASE", state["release_fail"])
+                    st["logged_end"] = True
+                    self.log.append(ROBOT_ACTOR, "FAILED", i, cs, cat, loc,
+                                    detail="RELEASE: item released outside the slot footprint")
+            elif ev.kind == "refused":
+                st["logged_end"] = True
+                i, cs, cat, loc = ids()
+                actor = SYSTEM_ACTOR if ev.phase == "ROUTE" else ROBOT_ACTOR
+                self.log.append(actor, "REFUSED", i, cs, cat, None,
+                                detail=f"{ev.phase}: {ev.detail}; not filed, item left on the intake counter for a "
+                                       f"handler")
             elif ev.kind == "failed":
-                fail(ev.phase, ev.detail)
+                st["logged_end"] = True
+                i, cs, cat, loc = ids()
+                self.log.append(ROBOT_ACTOR, "FAILED", i, cs, cat, loc, detail=f"{ev.phase}: {ev.detail}")
+            if fault == "swap_label_in_transit" and ev.kind == "grasp_verified":
+                other = (labels.POOL_IDS.index(true_id) + 1) % labels.POOL_SIZE if true_id in labels.POOL_IDS else 0
+                self.randomiser.set_label(content, f"label_{other:02d}")
 
-        c = ctl.PickPlaceController(m, d, cls, slot, on_event=on_event, perception_error=perception_error)
+        c = ctl.PickPlaceController(m, d, content, self.bank, self.cameras, on_event=on_event,
+                                    perception_error=perception_error)
         t0 = d.time
         max_tilt_cos = 1.0
         while not c.done:
@@ -153,47 +221,60 @@ class IntakeStation:
                 frame_cb(self, c)
         r = c.result
 
-        # Keep holding the final arm command while the item settles.
         for _ in range(int(SETTLE_AFTER / m.opt.timestep)):
             mujoco.mj_step(m, d)
             if frame_cb:
                 frame_cb(self, c)
 
+        # ---- evaluator: ground truth only ------------------------------------------------------------------------
         pos = d.xpos[item_body].copy()
         vel = np.zeros(6)
         mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_BODY, item_body, vel, 0)
         at_rest = np.linalg.norm(vel[3:]) < REST_LIN_VEL and np.linalg.norm(vel[:3]) < REST_ANG_VEL
-        inside = in_volume(pos, center, half)
-        placement_error = float(np.linalg.norm(pos[:2] - center[:2]))
+        final_location = None
+        if at_rest:
+            for loc in scene.LOCATIONS:
+                if in_volume(pos, *scene.slot_volume(m, d, loc)):
+                    final_location = loc
+        misfile = final_location is not None and final_location != correct_location
 
-        success = False
-        failure_phase, failure_reason = r.failure_phase, (None if r.success else r.reason)
-        if state["release_fail"]:
-            failure_phase, failure_reason = "RELEASE", state["release_fail"]
-        elif r.success and state["placed"]:
-            if inside and at_rest:
+        loc = st["location"]
+        success, placement_error = False, None
+        outcome, failure_phase, failure_reason = r.outcome, r.failure_phase, (None if r.success else r.reason)
+        inside_routed = loc is not None and final_location == loc
+        if r.outcome == "filed":
+            if st["placed"] and inside_routed:
                 success = True
-                self.log.append(SYSTEM_ACTOR, "VERIFIED", item_id, case_id, cls, slot,
-                                detail=f"at rest inside {slot}; offset {placement_error * 1000:.0f} mm from centre")
+                center, _ = scene.slot_volume(m, d, loc)
+                placement_error = float(np.linalg.norm(pos[:2] - center[:2]))
+                i, cs, cat, _ = ids()
+                self.log.append(SYSTEM_ACTOR, "VERIFIED", i, cs, cat, loc,
+                                detail=f"at rest inside {loc}; offset {placement_error * 1000:.0f} mm from centre")
             else:
-                why = "not inside slot volume" if not inside else "not at rest"
+                outcome = "failed"
+                why = "not inside the routed slot volume" if not inside_routed else "not at rest"
                 failure_phase, failure_reason = "VERIFY", f"post-settle check failed: {why}"
-                fail("VERIFY", failure_reason)
-        elif not state["fail_logged"]:
-            failure_phase = failure_phase or "UNKNOWN"
-            failure_reason = failure_reason or "cycle ended without placement"
-            fail(failure_phase, failure_reason)
+                if st["placed"]:
+                    i, cs, cat, _ = ids()
+                    self.log.append(SYSTEM_ACTOR, "FAILED", i, cs, cat, loc, detail=f"VERIFY: {failure_reason}")
+                self.bank.release(loc)
+        elif not st["logged_end"]:
+            i, cs, cat, l2 = ids()
+            self.log.append(ROBOT_ACTOR, "FAILED", i, cs, cat, l2, detail=f"{failure_phase}: {failure_reason}")
 
-        if not success:
-            self.alloc.release(slot)  # the slot was never filled
-        return EpisodeResult(ep, int(seed), item_id, case_id, cls, slot, success, None if success else failure_phase,
-                             None if success else failure_reason, r.grasped, r.slipped, round(r.duration, 3),
-                             round(placement_error, 4) if success else None, params.to_dict(),
-                             {"noise": {"pos_sigma_mm": noise.pos_sigma_m * 1000,
-                                        "yaw_sigma_deg": float(np.degrees(noise.yaw_sigma_rad)),
-                                        "size_sigma_pct": noise.size_sigma_frac * 100},
-                              "error": perception_error.to_dict(), "size_mult": size_mult, "mass_mult": mass_mult},
-                             bool(inside and at_rest), round(float(np.degrees(np.arccos(max_tilt_cos))), 2))
+        rec = st["record"]
+        return EpisodeResult(
+            ep, int(seed), true_id, st["decoded"], rec.case_id if rec else None, content,
+            rec.category if rec else None, loc, correct_location, final_location, outcome, success, misfile,
+            r.refusal_cause if outcome == "refused" else None,
+            None if success else failure_phase, None if success else failure_reason, r.grasped, r.slipped,
+            round(r.duration, 3), round(placement_error, 4) if success else None, r.scan, bank_before,
+            params.to_dict(),
+            {"noise": {"pos_sigma_mm": noise.pos_sigma_m * 1000, "yaw_sigma_deg": float(np.degrees(noise.yaw_sigma_rad)),
+                       "size_sigma_pct": noise.size_sigma_frac * 100},
+             "error": perception_error.to_dict(), "size_mult": size_mult, "mass_mult": mass_mult, "label": material,
+             "fault": fault},
+            bool(inside_routed), round(float(np.degrees(np.arccos(max_tilt_cos))), 2))
 
 
 def main():
@@ -201,35 +282,29 @@ def main():
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0, help="episode i uses seed + i")
     parser.add_argument("--log", default=str(scene.OUT_DIR / "custody_log.jsonl"))
-    parser.add_argument("--render", action="store_true", help="save start/end frames to out/m4_*.png")
-    parser.add_argument("--slot", choices=scene.SLOT_NAMES, help="force the target slot (exact replay)")
+    parser.add_argument("--label", help="force a label: pool index, 'damaged' or 'unregistered'")
+    parser.add_argument("--occupied", default=None, help="comma-separated occupied locations (exact replay)")
     args = parser.parse_args()
 
     station = IntakeStation(args.log)
-    renderer = mujoco.Renderer(station.m, 720, 1280) if args.render else None
     results = []
+    label = int(args.label) if args.label and args.label.isdigit() else args.label
+    occupied = [x for x in args.occupied.split(",") if x] if args.occupied is not None else None
     for i in range(args.episodes):
         seed = args.seed + i
         print(f"\n=== episode {i}  seed {seed} ===")
-        snaps = {}
-
-        def cb(st, c):
-            if renderer is not None and c is not None and "start" not in snaps:
-                snaps["start"] = scene.render(st.m, st.d, renderer=renderer)
-
-        res = station.run_episode(seed, frame_cb=cb, slot=args.slot)
-        if renderer is not None:
-            scene.save_png(snaps["start"], scene.OUT_DIR / f"m4_ep{i:02d}_start.png")
-            scene.save_png(scene.render(station.m, station.d, renderer=renderer),
-                           scene.OUT_DIR / f"m4_ep{i:02d}_end.png")
+        res = station.run_episode(seed, label=label, occupied=occupied)
         results.append(res)
         err = f"{res.placement_error * 1000:.0f} mm" if res.placement_error is not None else "-"
-        print(f"--> {'SUCCESS' if res.success else 'FAIL'} class={res.object_class} slot={res.slot} "
-              f"phase={res.failure_phase} t={res.cycle_time:.1f}s err={err} "
-              f"mass={res.params['mass']} mu={res.params['friction']} reason={res.failure_reason}")
+        print(f"--> {res.outcome.upper()} {res.object_class} true={res.true_item_id} read={res.decoded_id} "
+              f"routed={res.routed_location} correct={res.correct_location} final={res.final_location} "
+              f"misfile={res.misfile} t={res.cycle_time:.1f}s err={err} "
+              f"{res.refusal_cause or res.failure_reason or ''}")
 
-    n_ok = sum(r.success for r in results)
-    print(f"\n{n_ok}/{len(results)} episodes succeeded; log chain verify() -> {station.log.verify()}")
+    n = len(results)
+    print(f"\nfiled {sum(r.success for r in results)}/{n}, refused {sum(r.outcome == 'refused' for r in results)}, "
+          f"failed {sum(r.outcome == 'failed' for r in results)}, MISFILES {sum(r.misfile for r in results)}; "
+          f"log chain verify() -> {station.log.verify()}")
 
 
 if __name__ == "__main__":

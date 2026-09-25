@@ -16,7 +16,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-ACTIONS = ("SUBMITTED", "REGISTERED", "PICKED", "PLACED", "VERIFIED", "FAILED")
+# REFUSED is the system working correctly (fail closed: it declined to file rather than guess); FAILED is an execution
+# failure. They are different outcomes and must never be conflated.
+ACTIONS = ("SUBMITTED", "REGISTERED", "PICKED", "PLACED", "VERIFIED", "FAILED", "REFUSED")
 FIELDS = ("event_id", "timestamp", "actor", "action", "item_id", "case_id", "object_class", "slot_id", "detail",
           "prev_hash")
 ROBOT_ACTOR = "ROBOT:arm-01"

@@ -1,13 +1,15 @@
 """Gymnasium environment for learning evidence intake with a reduced Cartesian action space.
 
-Action (Box[-1, 1]^5): TCP delta (dx, dy, dz, dyaw) scaled to at most 1 cm / 0.1 rad per step, plus a gripper
-command (> 0 close, <= 0 open). The damped least-squares IK from scripts/ik.py turns the Cartesian target into arm
-joint targets. Control runs at 20 Hz (25 physics steps per env step).
+Action (Box[-1, 1]^6): TCP delta (dx, dy, dz, dyaw) scaled to at most 1 cm / 0.1 rad per step, a gripper command
+(> 0 close, <= 0 open), and a rail velocity command (Phase 1: the arm rides a rail; at most 0.4 m/s). The Cartesian
+target is held in the CARRIAGE frame, so moving the rail carries the arm with it. The damped least-squares IK from
+scripts/ik.py turns the target into arm joint targets (the rail is not in the IK). Control runs at 20 Hz.
 
 Observation: TCP pose, gripper state, item pose relative to the TCP, item size, class one-hot, target slot position
-relative to the TCP and to the item, and a two-finger contact flag. State only; no vision in Phase 0.
+relative to the TCP and to the item, a two-finger contact flag, and the rail position and setpoint. State only; no
+vision, and the target slot is given (the barcode/routing workflow lives in scripts/, not in this env).
 
-Phase 0 status: plumbing only. See NOTES.md (M7) for why no policy is trained here.
+Status: plumbing only. See NOTES.md (M7) for why no policy is trained here.
 """
 
 import sys
@@ -26,13 +28,14 @@ from controller import finger_contact_forces  # noqa: E402
 from randomise import Randomiser  # noqa: E402
 
 PHYSICS_STEPS = 25
-MAX_STEPS = 400  # 20 s of simulated time
+MAX_STEPS = 600  # 30 s of simulated time (a rail traverse to CAB-C adds ~4 s)
+RAIL_STEP = 0.02  # m per env step = 0.4 m/s
 MAX_DPOS = 0.01
 MAX_DYAW = 0.1
 WORKSPACE_LO = np.array([0.05, -0.40, 0.005])
 WORKSPACE_HI = np.array([0.75, 0.60, 0.45])
-ITEM_BOUNDS_LO = np.array([-0.2, -0.5, -0.05])
-ITEM_BOUNDS_HI = np.array([0.8, 0.7, 0.8])
+ITEM_BOUNDS_LO = np.array([-0.2, -1.2, -0.05])
+ITEM_BOUNDS_HI = np.array([0.8, 1.4, 0.8])
 LIFT_HEIGHT = 0.03
 # MuJoCo's box-pad contacts flicker: one pad can drop out of the active set for single physics steps while an item
 # is plainly held (NOTES.md, M5/M7). "Held" is therefore measured over the env step's physics substeps (each finger
@@ -60,12 +63,15 @@ class EvidenceIntakeEnv(gym.Env):
         self.grip_act = scene.actuator_id(self.m, scene.GRIPPER_ACTUATOR)
         self.arm_qadr = scene.arm_qpos_adr(self.m)
         self.finger_qadr = np.array([self.m.jnt_qposadr[scene.joint_id(self.m, j)] for j in scene.FINGER_JOINTS])
+        self.rail_act = scene.actuator_id(self.m, scene.RAIL_ACTUATOR)
+        self.rail_qadr = self.m.jnt_qposadr[scene.joint_id(self.m, scene.RAIL_JOINT)]
+        self.rail_range = self.m.jnt_range[scene.joint_id(self.m, scene.RAIL_JOINT)]
         self.max_steps = max_steps
         self.render_mode = render_mode
         self._renderer = None
 
-        self.action_space = spaces.Box(-1.0, 1.0, shape=(5,), dtype=np.float32)
-        obs_dim = 3 + 2 + 2 + 3 + 3 + 3 + 4 + 3 + 3 + 1
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(6,), dtype=np.float32)
+        obs_dim = 3 + 2 + 2 + 3 + 3 + 3 + 4 + 3 + 3 + 1 + 2
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(obs_dim,), dtype=np.float32)
 
     # ---- helpers -------------------------------------------------------------------------------------------------
@@ -100,7 +106,14 @@ class EvidenceIntakeEnv(gym.Env):
             tcp, [np.sin(yaw), np.cos(yaw)], [opening, self.grip_cmd], item - tcp, [np.sin(rel_yaw), np.cos(rel_yaw),
                                                                                     tilt],
             size, onehot, self.slot_center - tcp, self.slot_center - item, [float(self._held_now)],
+            [self._rail_q(), self.rail_set],
         ]).astype(np.float32)
+
+    def _rail_q(self):
+        return float(self.d.qpos[self.rail_qadr])
+
+    def _world(self, rel):
+        return rel + np.array([0.0, self._rail_q(), 0.0])
 
     # ---- gym API -------------------------------------------------------------------------------------------------
 
@@ -120,7 +133,8 @@ class EvidenceIntakeEnv(gym.Env):
         self.slot_center, self.slot_half = scene.slot_volume(self.m, self.d, slot)
         mujoco.mj_step(self.m, self.d, nstep=150)  # let the item settle on the counter
         self.rest_z = self.d.xpos[self.item_body][2]
-        self.target_pos = self.d.site_xpos[self.tcp].copy()
+        self.rail_set = self._rail_q()
+        self.target_rel = self.d.site_xpos[self.tcp].copy() - np.array([0.0, self._rail_q(), 0.0])
         self.target_yaw = ik.tcp_yaw(self.d, self.tcp)
         self.q_cmd = self.d.qpos[self.arm_qadr].copy()
         self.grip_cmd = -1.0
@@ -133,10 +147,12 @@ class EvidenceIntakeEnv(gym.Env):
 
     def step(self, action):
         a = np.clip(np.asarray(action, dtype=float), -1.0, 1.0)
-        self.target_pos = np.clip(self.target_pos + a[:3] * MAX_DPOS, WORKSPACE_LO, WORKSPACE_HI)
+        self.target_rel = np.clip(self.target_rel + a[:3] * MAX_DPOS, WORKSPACE_LO, WORKSPACE_HI)
         self.target_yaw = float(np.clip(self.target_yaw + a[3] * MAX_DYAW, -np.pi, np.pi))
         self.grip_cmd = 1.0 if a[4] > 0 else -1.0
-        res = self.ik.solve(self.d, self.target_pos, ik.down_quat(self.target_yaw), q_init=self.q_cmd)
+        self.rail_set = float(np.clip(self.rail_set + a[5] * RAIL_STEP, *self.rail_range))
+        self.d.ctrl[self.rail_act] = self.rail_set
+        res = self.ik.solve(self.d, self._world(self.target_rel), ik.down_quat(self.target_yaw), q_init=self.q_cmd)
         self.q_cmd = res.q
         self.d.ctrl[self.arm_act] = self.q_cmd
         self.d.ctrl[self.grip_act] = scene.GRIPPER_CLOSED if self.grip_cmd > 0 else scene.GRIPPER_OPEN
@@ -206,10 +222,11 @@ def scripted_action(env):
     top = geom_highest_z(m, d, env.item_geom)
     stage = getattr(env, "_stage", "approach")
 
-    def toward(goal, goal_yaw, grip):
-        dp = np.clip((goal - env.target_pos) / MAX_DPOS, -1, 1)
+    def toward(goal, goal_yaw, grip, rail=0.0):
+        goal_rel = goal - np.array([0.0, env._rail_q(), 0.0])
+        dp = np.clip((goal_rel - env.target_rel) / MAX_DPOS, -1, 1)
         dy = np.clip((ik.nearest_equivalent_yaw(goal_yaw, env.target_yaw) - env.target_yaw) / MAX_DYAW, -1, 1)
-        return np.array([*dp, dy, grip], dtype=np.float32), np.linalg.norm(goal - tcp) < 0.008
+        return np.array([*dp, dy, grip, rail], dtype=np.float32), np.linalg.norm(goal - tcp) < 0.008
 
     grasp_yaw = iyaw + np.pi / 2
     if not hasattr(env, "_grasp_yaw"):
@@ -224,12 +241,18 @@ def scripted_action(env):
         if done:
             env._stage, env._t = "close", 0
     elif stage == "close":
-        act, _ = toward(env.target_pos.copy(), env.target_yaw, 1)
+        act, _ = toward(env._world(env.target_rel), env.target_yaw, 1)
         env._t += 1
         env._stage = "lift" if env._t > 10 else stage
-    elif stage == "lift":
-        act, done = toward(np.array([tcp[0], tcp[1], 0.30]), env._grasp_yaw, 1)
-        env._stage = "carry" if done else stage
+    elif stage == "lift":  # up to a carry height that clears every locker, over the carriage
+        act, done = toward(np.array([0.42, env._rail_q(), 0.45]), env._grasp_yaw, 1)
+        env._stage = "traverse" if done else stage
+    elif stage == "traverse":  # rail only; the arm target is held in the carriage frame
+        station = scene.CABINETS[scene.cabinet_of(env.slot)][1]
+        act, _ = toward(env._world(env.target_rel), env.target_yaw, 1,
+                        rail=float(np.clip((station - env.rail_set) / RAIL_STEP, -1, 1)))
+        if abs(env._rail_q() - station) < 0.002 and abs(env.rail_set - station) < 1e-9:
+            env._stage = "carry"
     elif stage == "carry":
         act, done = toward(np.array([env.slot_center[0], env.slot_center[1], 0.30]), np.pi / 2, 1)
         env._stage = "insert" if done else stage
@@ -239,7 +262,7 @@ def scripted_action(env):
         act, done = toward(np.array([env.slot_center[0], env.slot_center[1], z]), np.pi / 2, 1)
         env._stage = "release" if done else stage
     else:
-        act, _ = toward(env.target_pos.copy(), env.target_yaw, -1)
+        act, _ = toward(env._world(env.target_rel), env.target_yaw, -1)
     return act
 
 

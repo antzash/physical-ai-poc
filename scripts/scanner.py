@@ -104,3 +104,45 @@ def decode(rgb, max_candidates=3):
                 if text is not None:
                     return ScanResult(text, method, float(a), len(boxes), time.time() - t0, attempts, box)
     return ScanResult(None, "none", None, len(boxes), time.time() - t0, attempts, None)
+
+
+class Cameras:
+    """The robot's cameras. The only way the robot perceives identity is through these rendered pixels."""
+
+    def __init__(self, model):
+        import mujoco
+
+        import scene
+
+        self._mujoco, self._scene, self.model = mujoco, scene, model
+        w, h = scene.SCANNER_RES
+        self.scanner = mujoco.Renderer(model, h, w)
+        ww, wh = scene.WRIST_RES
+        self.wrist = mujoco.Renderer(model, wh, ww)
+        self.last_image = {}  # camera name -> last rendered frame (for the video overlay)
+
+    def _render(self, renderer, data, cam):
+        renderer.update_scene(data, camera=cam)
+        img = renderer.render()
+        self.last_image[cam] = img
+        return img
+
+    def scan_intake(self, data):
+        cam = self._scene.SCANNER_CAM
+        r = decode(self._render(self.scanner, data, cam))
+        r.extra["camera"] = cam
+        return r
+
+    def scan_wrist(self, data):
+        """Try both wrist cameras; return the first decode (or the last no-read)."""
+        r = None
+        for cam in self._scene.WRIST_CAMS:
+            r = decode(self._render(self.wrist, data, cam))
+            r.extra["camera"] = cam
+            if r.ok:
+                return r
+        return r
+
+    def close(self):
+        self.scanner.close()
+        self.wrist.close()

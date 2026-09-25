@@ -1,6 +1,17 @@
-"""Scripted pick-and-place state machine.
+"""The evidence intake state machine.
 
-HOME -> APPROACH -> DESCEND -> CLOSE -> LIFT -> TRANSIT -> INSERT -> RELEASE -> RETREAT -> HOME
+IDLE -> SCAN -> ROUTE -> APPROACH -> DESCEND -> CLOSE -> LIFT -> TRAVERSE -> TRANSIT -> VERIFY_SCAN -> INSERT
+     -> RELEASE -> RETREAT -> HOME (arm home, then the rail back to the intake station)
+
+FAIL CLOSED. The destination comes only from the barcode the robot READS (scanner.Cameras) through routing.route().
+The controller never receives, and must never reach, the simulator's true item identity: the evaluator uses that to
+detect misfiles, so a controller that could see it would make the zero-misfile result meaningless. (item_cls below is
+simulator plumbing to resolve which body is on the counter; it must not drive any decision.) Unreadable labels,
+unknown IDs, full cabinets and verify mismatches end in REFUSED, never a guess or a fallback:
+  SCAN        intake scanner; on no-read, ONE re-scan from a second pose (wrist cameras over the bag); else refuse.
+  ROUTE       case lookup -> cabinet and slot; else refuse.
+  VERIFY_SCAN wrist re-scan before release: mismatch -> refuse; no-read -> one retry from 3 cm higher -> refuse.
+              A refused item in the gripper is carried back and put down on the counter (RETURN_ITEM).
 
 Every phase has an entry action, a completion condition measured on the simulated state (never elapsed time
 alone), and a timeout that ends the cycle as a failure attributed to that phase. Grasping is done purely through
@@ -13,11 +24,12 @@ import mujoco
 import numpy as np
 
 import ik
+import routing
 import scene
 from perception import ZERO_ERROR, observe
 
-PHASES = ["HOME", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRAVERSE", "TRANSIT", "INSERT", "RELEASE", "RETREAT",
-          "RETURN"]
+PHASES = ["IDLE", "SCAN", "ROUTE", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRAVERSE", "TRANSIT", "VERIFY_SCAN",
+          "INSERT", "RELEASE", "RETREAT", "RETURN_ITEM", "HOME"]
 
 # Gripper geometry measured from the Menagerie meshes, in the TCP frame (see NOTES.md, M2).
 FINGERTIP_BELOW_TCP = 0.0089
@@ -34,6 +46,9 @@ CARRY_Z = 0.45
 RAIL_VMAX = 0.40  # m/s; MuJoCo position actuators have no velocity limit, so the setpoint ramp enforces it
 RAIL_TOL = 0.001
 RAIL_SETTLE_VEL = 0.002
+RESCAN_TCP_ABOVE_TOP = 0.005  # second-pose scan: TCP just above the bag, wrist cameras ~0.11 m over the label
+VERIFY_RETRY_RAISE = 0.03
+PUTDOWN_CLEARANCE = 0.004  # RETURN_ITEM: bag bottom this far above the counter when opening the gripper
 BIN_WALL_TOP_Z = 0.108
 WALL_CLEARANCE = 0.012
 RELEASE_DROP = 0.010  # item bottom this far above the bin floor at release
@@ -56,21 +71,25 @@ GRASP_CONTACT_FRACTION = 0.6  # each finger must be in contact in at least this 
 
 @dataclass
 class ControllerEvent:
-    kind: str  # "phase", "grasp_verified", "released", "done", "failed"
+    kind: str  # phase, scanned, scan_retry, routed, refused, grasp_verified, traversed, verified, released, failed, done
     phase: str
     time: float
     detail: str = ""
+    data: dict = field(default_factory=dict)
 
 
 @dataclass
 class CycleResult:
-    success: bool
+    success: bool  # filed: released into the routed slot after a matching verify scan and a clean return
     failure_phase: str | None
     reason: str
     grasped: bool
     slipped: bool
     duration: float
     events: list = field(default_factory=list)
+    outcome: str = "filed"  # "filed", "refused" (fail-closed decision) or "failed" (execution failure)
+    refusal_cause: str | None = None  # no_decode, no_case_match, cabinet_full, verify_mismatch, verify_no_read
+    scan: dict = field(default_factory=dict)  # intake/verify scan details (decoded strings, cameras, times)
 
 
 def _smoothstep(u):
@@ -138,16 +157,23 @@ def grasp_verified(samples):
 
 
 class PickPlaceController:
-    def __init__(self, model, data, item_cls, slot, on_event=None, ik_solver=None, perception_error=ZERO_ERROR):
+    def __init__(self, model, data, item_cls, bank, cameras, on_event=None, ik_solver=None,
+                 perception_error=ZERO_ERROR):
         self.m, self.d = model, data
-        self.item_cls = item_cls
+        self.item_cls = item_cls  # plumbing only (which body is on the counter); never used for a decision
+        self.bank = bank  # routing.CabinetBank: logical slot occupancy
+        self.cameras = cameras  # scanner.Cameras: the ONLY source of identity
         # The controller's ONLY view of the item: ground truth plus this episode's fixed perception error.
         self.perception_error = perception_error
-        self.slot = slot  # a location address such as "CAB-B/slot_2"
+        self.slot = None  # decided in ROUTE from the decoded barcode, e.g. "CAB-B/slot_2"
+        self.station = None
+        self.scan_id = None  # what the intake scan decoded
+        self.route = None
+        self.refusal = None
+        self.scan_info = {}
         self.rail_act = scene.actuator_id(model, scene.RAIL_ACTUATOR)
         self.rail_qadr = model.jnt_qposadr[scene.joint_id(model, scene.RAIL_JOINT)]
         self.rail_dadr = model.jnt_dofadr[scene.joint_id(model, scene.RAIL_JOINT)]
-        self.station = scene.CABINETS[scene.cabinet_of(slot)][1]
         self.on_event = on_event
         self.ik = ik_solver or ik.IK(model)
         self.tcp = scene.site_id(model, "tcp")
@@ -174,12 +200,12 @@ class PickPlaceController:
         self.rest_z = data.xpos[self.item_body][2]  # ground truth: used only by the grasp verifier (evaluation)
         self.result: CycleResult | None = None
         self.start_time = data.time
-        self._enter("HOME")
+        self._enter("IDLE")
 
     # ---- helpers -------------------------------------------------------------------------------------------------
 
-    def _emit(self, kind, detail=""):
-        ev = ControllerEvent(kind, self.phase, self.d.time, detail)
+    def _emit(self, kind, detail="", **data):
+        ev = ControllerEvent(kind, self.phase, self.d.time, detail, data)
         self.events.append(ev)
         if self.on_event:
             self.on_event(ev)
@@ -241,8 +267,19 @@ class PickPlaceController:
 
     def _fail(self, reason):
         self._emit("failed", reason)
+        if self.route is not None and self.route.ok:
+            self.bank.release(self.slot)  # the reserved slot was never filled
         self.result = CycleResult(False, self.phase, reason, self.grasped, self.slipped,
-                                  self.d.time - self.start_time, self.events)
+                                  self.d.time - self.start_time, self.events, "failed",
+                                  self.refusal[0] if self.refusal else None, self.scan_info)
+
+    def _refuse(self, cause, reason):
+        """Fail closed: decline to file, log REFUSED, and leave the item for a human handler."""
+        self.refusal = (cause, reason, self.phase)
+        self._emit("refused", reason, cause=cause)
+        if self.route is not None and self.route.ok:
+            self.bank.release(self.slot)
+        self._enter("RETURN_ITEM" if self.grasped else "HOME")
 
     def _check_hold(self):
         """Detect the item slipping out of the grasp while carrying it."""
@@ -279,7 +316,7 @@ class PickPlaceController:
 
     # ---- phases --------------------------------------------------------------------------------------------------
 
-    def _enter_home(self):
+    def _start_joint_home(self):
         self.d.ctrl[self.grip_act] = scene.GRIPPER_OPEN
         self.joint_start = self.d.qpos[self.arm_qadr].copy()
         self.joint_dur = max(0.3, np.max(np.abs(self.home_q - self.joint_start)) / 1.0)
@@ -292,10 +329,64 @@ class PickPlaceController:
         self.d.ctrl[self.arm_act] = self.q_cmd
         return u >= 1.0 and np.max(np.abs(self.d.qpos[self.arm_qadr] - self.home_q)) < 0.02
 
-    def _update_home(self):
-        if self._step_joint_home():
+    def _enter_idle(self):
+        self._start_joint_home()
+
+    def _update_idle(self):
+        if self._step_joint_home():  # arm parked at home, clear of the scanner's view
             self._cmd_pose = self._tcp_pose()
-            self._enter("APPROACH")
+            self._enter("SCAN")
+
+    def _enter_scan(self):
+        self.scan_stage = "intake"
+        self.timeout = 30.0
+
+    def _update_scan(self):
+        if self.scan_stage == "intake":
+            r = self.cameras.scan_intake(self.d)
+            self.scan_info["intake"] = self._scan_record(r)
+            if r.ok:
+                return self._scanned(r)
+            self._emit("scan_retry", f"no read from {r.extra['camera']}; re-scanning from a second pose")
+            obs = self._observe()
+            yaw = ik.nearest_equivalent_yaw(obs.yaw + np.pi / 2, self._cmd_pose[1])
+            top = obs.position[2] + obs.vertical_half_extent
+            dur = self._plan([((obs.position[0], obs.position[1], top + PREGRASP_CLEARANCE), yaw),
+                              ((obs.position[0], obs.position[1], top + RESCAN_TCP_ABOVE_TOP), yaw)], CART_SPEED)
+            self.timeout = self.d.time - self.phase_start + dur + 3.0
+            self.scan_stage = "move"
+            return
+        if self.scan_stage == "move":
+            self._track()
+            if self._at_goal():
+                r = self.cameras.scan_wrist(self.d)
+                self.scan_info["rescan"] = self._scan_record(r)
+                if r.ok:
+                    return self._scanned(r)
+                self._refuse("no_decode", "no barcode read from the intake scanner or the wrist re-scan")
+
+    def _scan_record(self, r):
+        return {"camera": r.extra.get("camera"), "decoded": r.text, "sim_time": round(self.d.time, 3),
+                "method": r.method, "attempts": r.attempts}
+
+    def _scanned(self, r):
+        self.scan_id = r.text
+        self._emit("scanned", f"{r.extra['camera']} decoded {r.text}", decoded=r.text, camera=r.extra["camera"])
+        self._enter("ROUTE")
+
+    def _enter_route(self):
+        self.timeout = 1.0
+
+    def _update_route(self):
+        self.route = routing.route(self.scan_id, self.bank)  # the DECODED ID; nothing else
+        if not self.route.ok:
+            return self._refuse(self.route.refusal, self.route.reason)
+        self.slot = self.route.location
+        self.station = scene.CABINETS[self.route.cabinet][1]
+        self._emit("routed", f"{self.scan_id} -> {self.route.record.case_id} -> {self.route.record.category} -> "
+                             f"{self.slot}", location=self.slot, record=self.route.record)
+        self._cmd_pose = self._tcp_pose()
+        self._enter("APPROACH")
 
     def _enter_approach(self):
         obs = self._observe()
@@ -414,7 +505,40 @@ class PickPlaceController:
         if not self._check_hold():
             return
         if self._at_goal():
-            self._enter("INSERT")
+            self._enter("VERIFY_SCAN")
+
+    def _enter_verify_scan(self):
+        self.verify_stage = "scan"
+        self.timeout = 8.0
+
+    def _update_verify_scan(self):
+        if not self._check_hold():
+            return
+        if self.verify_stage == "scan":
+            r = self.cameras.scan_wrist(self.d)
+            self.scan_info["verify"] = self._scan_record(r)
+            if r.ok:
+                return self._verified(r)
+            pos, yaw = self._cmd_pose
+            self._plan([((pos[0], pos[1], pos[2] + VERIFY_RETRY_RAISE), yaw)], SLOW_SPEED)
+            self.verify_stage = "raise"
+            return
+        self._track()
+        if self._at_goal():
+            r = self.cameras.scan_wrist(self.d)
+            self.scan_info["verify_retry"] = self._scan_record(r)
+            if r.ok:
+                return self._verified(r)
+            self._refuse("verify_no_read", "verify scan: no barcode read from the wrist cameras (two attempts)")
+
+    def _verified(self, r):
+        match = r.text == self.scan_id
+        self.scan_info["verify_match"] = match
+        self._emit("verified", f"{r.extra['camera']} decoded {r.text}: {'MATCH' if match else 'MISMATCH'}",
+                   decoded=r.text, camera=r.extra["camera"], match=match)
+        if not match:
+            return self._refuse("verify_mismatch", f"verify scan read {r.text}, expected {self.scan_id}")
+        self._enter("INSERT")
 
     def release_height(self):
         """TCP height at release: item just above the bin floor, but the hand body kept above the bin walls."""
@@ -458,14 +582,56 @@ class PickPlaceController:
     def _update_retreat(self):
         self._track()
         if self._at_goal():
-            self._enter("RETURN")
+            self._enter("HOME")
 
-    def _enter_return(self):
-        self._enter_home()
+    def _enter_return_item(self):
+        """A refused item in the gripper goes back to the counter, where a handler will deal with it."""
+        pos, yaw = self._cmd_pose
+        self.item_stage = "raise"
+        self._plan([((pos[0], pos[1], CARRY_Z), yaw), ((CARRY_X, self._rail_q(), CARRY_Z), yaw)], CART_SPEED)
+        self.timeout = 40.0
+
+    def _update_return_item(self):
+        if self.item_stage in ("raise", "rail", "lower") and not self._check_hold():
+            return
+        if self.item_stage == "raise":
+            self._track()
+            if self._at_goal():
+                self.item_stage = "rail"
+                self._start_rail(scene.INTAKE_STATION)
+        elif self.item_stage == "rail":
+            self.d.ctrl[self.arm_act] = self.q_cmd
+            if self._step_rail():
+                pos, yaw = self._cmd_pose
+                self._cmd_pose = (pos + np.array([0.0, self.rail_to - self.rail_from, 0.0]), yaw)
+                g = self.grasp_obs.position
+                down = self.grasp_z + PUTDOWN_CLEARANCE
+                self._plan([((g[0], g[1], down + PREGRASP_CLEARANCE), self.grasp_yaw), ((g[0], g[1], down), self.grasp_yaw)],
+                           CART_SPEED)
+                self.item_stage = "lower"
+        elif self.item_stage == "lower":
+            self._track()
+            if self._at_goal():
+                self.d.ctrl[self.grip_act] = scene.GRIPPER_OPEN
+                self.item_stage = "open"
+        elif self.item_stage == "open":
+            self._track()
+            if np.min(self._finger_q()) > 0.035 and np.all(finger_contact_forces(self.m, self.d, self.item_geom) == 0):
+                pos, yaw = self._cmd_pose
+                self._plan([((pos[0], pos[1], pos[2] + PREGRASP_CLEARANCE), yaw)], CART_SPEED)
+                self.item_stage = "clear"
+        else:
+            self._track()
+            if self._at_goal():
+                self._emit("returned", "item left on the intake counter for a handler")
+                self._enter("HOME")
+
+    def _enter_home(self):
+        self._start_joint_home()
         self.return_stage = "arm"
         self.timeout += 1.5 * abs(scene.INTAKE_STATION - self._rail_q()) / RAIL_VMAX + 2.0
 
-    def _update_return(self):
+    def _update_home(self):
         if self.return_stage == "arm":
             if self._step_joint_home():
                 self.return_stage = "rail"
@@ -474,8 +640,13 @@ class PickPlaceController:
         self.d.ctrl[self.arm_act] = self.q_cmd  # arm held at home while the carriage returns to the intake station
         if self._step_rail():
             self._emit("done")
-            self.result = CycleResult(True, None, "cycle complete", self.grasped, self.slipped,
-                                      self.d.time - self.start_time, self.events)
+            if self.refusal:
+                cause, reason, phase = self.refusal
+                self.result = CycleResult(False, phase, reason, self.grasped, self.slipped,
+                                          self.d.time - self.start_time, self.events, "refused", cause, self.scan_info)
+            else:
+                self.result = CycleResult(True, None, "cycle complete", self.grasped, self.slipped,
+                                          self.d.time - self.start_time, self.events, "filed", None, self.scan_info)
 
     # ---- public API ----------------------------------------------------------------------------------------------
 
@@ -494,42 +665,3 @@ class PickPlaceController:
             getattr(self, f"_update_{self.phase.lower()}")()
         self.steps += 1
 
-
-def run_cycle(model, data, item_cls, slot, max_time=30.0, frame_cb=None):
-    """Run one full cycle to completion; frame_cb(ctrl) is called after every physics step if given."""
-    ctrl = PickPlaceController(model, data, item_cls, slot)
-    while not ctrl.done and data.time < max_time:
-        ctrl.update()
-        mujoco.mj_step(model, data)
-        if frame_cb:
-            frame_cb(ctrl)
-    if not ctrl.done:
-        ctrl._fail(f"cycle exceeded {max_time}s")
-    return ctrl.result
-
-
-if __name__ == "__main__":
-    # One cycle with the scene's nominal item pose -> CAB-B/slot_0 (traverses the rail), one frame per phase.
-    m, d = scene.load()
-    renderer = mujoco.Renderer(m, 720, 1280)
-    seen = {}
-
-    def snap(ctrl):
-        key = ctrl.phase
-        if ctrl.done:
-            key = "END"
-        # Grab each phase shortly before it ends by overwriting until the phase changes.
-        seen[key] = scene.render(m, d, renderer=renderer) if d.time - ctrl.phase_start > 0.05 or key not in seen else seen[key]
-
-    result = run_cycle(m, d, "carton", "CAB-B/slot_0", max_time=60.0, frame_cb=snap)
-    mujoco.mj_step(m, d, nstep=500)
-    seen["SETTLED"] = scene.render(m, d, renderer=renderer)
-    for i, (k, img) in enumerate(seen.items()):
-        scene.save_png(img, scene.OUT_DIR / f"m2_{i:02d}_{k.lower()}.png")
-    for ev in result.events:
-        print(f"{ev.time:7.3f}s  {ev.phase:9s} {ev.kind:15s} {ev.detail}")
-    center, half = scene.slot_volume(m, d, "CAB-B/slot_0")
-    item = d.xpos[scene.body_id(m, "item_carton")]
-    inside = bool(np.all(np.abs(item - center) <= half))
-    print(f"success={result.success} phase={result.failure_phase} reason={result.reason} "
-          f"duration={result.duration:.2f}s item={item.round(4)} inside CAB-B/slot_0={inside}")

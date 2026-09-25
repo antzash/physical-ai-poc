@@ -596,3 +596,45 @@ simulator's true item ID; refuse and leave the item for a human. Misfile rate is
 - **Transitional state:** until Task D, the episode still allocates locations with the Phase 0 first-free counter
   (`slots.py`) over the 12 addresses; routing from the decoded barcode replaces it in Task D. The old allocator test
   moved out of `test_custody_log.py`; `test_perception.py` uses location addresses.
+
+## Task D — The extended state machine
+
+`IDLE → SCAN → ROUTE → APPROACH → DESCEND → CLOSE → LIFT → TRAVERSE → TRANSIT → VERIFY_SCAN → INSERT → RELEASE →
+RETREAT → HOME`, plus `RETURN_ITEM` (carry a refused item back to the counter). Every phase has a real completion
+condition and a timeout.
+
+- **Identity boundary.** The controller receives cameras (`scanner.Cameras`), the routing bank, the perception seam's
+  pose and nothing else. `episode.py` is the world and the evaluator: it picks the true item from the label pool,
+  fills the bag according to that item's case record, applies the label, and judges misfiles. The officer's
+  SUBMITTED record carries `PENDING-SCAN` (the ID is unknown until read). Custody records use the case category,
+  never the simulator's content class. `slots.py` (the Phase 0 counter) is deleted.
+- **SCAN:** the intake scanner (4000 × 3260). On no-read, exactly one re-scan from a second pose (TCP over the bag,
+  wrist cameras ~0.11 m above the label), then `REFUSED no_decode`. It never guesses and never retries beyond that.
+- **ROUTE:** `routing.route(decoded_id)`. `REFUSED no_case_match` or `REFUSED cabinet_full` otherwise; the slot is
+  reserved and released on any failure or refusal.
+- **VERIFY_SCAN** at the slot, before INSERT: the wrist pair must read the same ID the intake scan read. A mismatch
+  → `REFUSED verify_mismatch` immediately; a no-read → one retry 3 cm higher → `REFUSED verify_no_read`. A refused
+  item in the gripper is carried back and put down on the counter where it was picked.
+- **Custody log:** `REFUSED` added to the vocabulary, distinct from `FAILED` (a refusal is the system working).
+  REGISTERED records the decoded string, the camera and the time; PLACED records the verify scan (camera, time,
+  MATCH); REFUSED records the phase and reason and "item left on the intake counter for a handler".
+- **Evaluator:** after settling, which of the 12 slot volumes holds the bag (ground truth). `misfile` = at rest in
+  any slot other than the one the TRUE id routes to from the same occupancy. `VERIFIED` requires the bag at rest in
+  the routed slot.
+- **Exact replay:** seed plus `bank_before` (`run_episode(occupied=...)`, `episode.py --occupied`).
+
+### Verification
+- 6 randomised episodes: 6/6 filed, 0 misfiles; the log shows SUBMITTED (PENDING-SCAN) → REGISTERED (decoded
+  ID, camera, case, category → location) → PICKED → PLACED (verify MATCH) → VERIFIED; chain intact.
+- Each refusal path, deliberately: damaged label → intake + re-scan unread → `REFUSED no_decode` (logged as UNREAD);
+  unregistered → `REFUSED no_case_match`; label swapped in transit (test-only world fault) → verify MISMATCH →
+  `REFUSED`, bag carried back from CAB-B and put down on the counter; weapons locker full → `REFUSED cabinet_full`.
+  All four end with the item on the counter, no PLACED, no VERIFIED, no misfile.
+- `tests/test_workflow.py` (7 tests): the controller source has no path to the true identity (no pool IDs, no
+  `geom_matid`, no case DB, no truth parameters); a normal item files where its label routes; **a mislabelled item
+  (truth narcotics, label weapons) is filed by its label to CAB-B, and the evaluator flags it as a misfile**, which
+  proves both halves of the boundary; plus the four refusal paths. The full suite is now 27 tests across four files.
+- **RL scaffold kept correct:** since Task C no locker is reachable from rail station 0, so the Phase 0 env would
+  have been silently unsolvable. It now has a 6th action (rail velocity, ≤ 0.4 m/s) with the Cartesian target in the
+  carriage frame; `check_env` passes; the scripted policy solves 16/16 through the action interface, including
+  traverses; a SAC smoke run checkpoints and reloads.
