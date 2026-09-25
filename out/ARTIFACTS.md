@@ -91,3 +91,22 @@ flagged below.
 
 `robustness_20260925T083234Z.json` and `sweep_20260925T083234Z/` (10-episode smoke test), `c_test.mp4`,
 `eval_20260925T083020Z*` (12-episode noise trial).
+
+## Phase 1
+
+### Keep
+
+| File | What it is | Produced by | Code |
+|---|---|---|---|
+| `robustness_20260925T132202Z.json` | **Phase 1 re-measure**: baseline 5×200, position 7×200, OOD 5×200 (3,400 episodes) with per-episode params, drawn error, scans, true/decoded IDs, routed/correct/final locations | `python3 scripts/sweep.py --episodes 200 --workers 2 --only baseline position ood` | `a64184c` (stamped `-dirty`: concurrent edits the workers did not load) |
+| `sweep_20260925T132202Z/` | Per-point custody logs (all chains intact) | same run | same |
+| `p1_completion_curve.png`, `p1_outcomes_position.png`, `p1_outcomes_ood.png` | Completion vs pose error; outcome composition (filed / refused / failed / misfiled) | `python3 scripts/plot_phase1.py out/robustness_20260925T132202Z.json` | Task E commit |
+| `scan_degradation.json` | Intake read and misread rate vs blur and noise | `python3 scripts/scan_degradation.py --episodes 100` | Task E commit |
+| `p1e_misfile_cabinet.png`, `p1e_noread_wrist_cam_*.png` | Replays: a misfile (bag across the divider) and a zero-noise verify no-read (46° tilt) | ad-hoc replay | Task E commit |
+| `p1b_label_crop.png` | Scanner pixels of the first static decode (`EV-2026-001259`) | Task B probe | `8247741` + probe |
+| `p1c_traverse_sheet.png`, `p1c_room.png`, `p1a_bags.png` | Rail traverse per phase; the room; bag close-ups | Task A/C probes | Task A/C commits |
+
+### Safe to discard
+
+`_aborted_sweep_20260925T130252Z/` (the 8-worker attempt, stopped), `robustness_20260925T083234Z.json` (Phase 0B
+smoke), `p1d_*`, `p1e_timing*`, `p1e_replay*`, `eval_20260925T12*`/`13*` trial runs.

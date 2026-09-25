@@ -638,3 +638,92 @@ condition and a timeout.
   have been silently unsolvable. It now has a 6th action (rail velocity, ≤ 0.4 m/s) with the Cartesian target in the
   carriage frame; `check_env` passes; the scripted policy solves 16/16 through the action interface, including
   traverses; a SAC smoke run checkpoints and reloads.
+
+## Task E — Re-measure
+
+`python3 scripts/sweep.py --only baseline position ood` → `out/robustness_20260925T132202Z.json`, 17 points × 200
+episodes = 3,400 episodes, 2 workers, 35 min. Charts: `python3 scripts/plot_phase1.py <json>` →
+`out/p1_completion_curve.png`, `out/p1_outcomes_position.png`, `out/p1_outcomes_ood.png`. Every point's custody
+chain is intact.
+
+**Provenance.** The workers imported the committed code at `a64184c`. The stamp reads `a64184c-dirty` because I
+edited `record.py`, `CLAUDE.md` and the controller's scan record (adding a display-only `region` field) while the
+sweep ran; none of that was loaded by the workers or affects results.
+
+**Throughput note.** An 8-worker attempt ran *slower* than one process (about 0.7 episodes/s): 4P+4E cores, one
+GPU, and a 13 MP scanner render per episode, with Spotlight indexing `out/` on top. It was stopped and discarded
+(`out/_aborted_sweep_*`). Measured scaling with threads pinned: 1 worker 0.86 episodes/s, 2 workers 1.0, 4 workers
+0.83. The run used 2 workers, and `out/.metadata_never_index` stops Spotlight indexing the output.
+
+### 1. Misfiles (headline safety metric, target 0) — NOT met under pose error
+| pool | misfiles | 95% CI (Wilson) |
+|---|---|---|
+| zero noise (1,200 episodes: baseline 5×200 + position 0 mm) | **0 / 1200** | [0, 0.32%] |
+| position error 2–20 mm (1,200 episodes) | **5 / 1200** | [0.18%, 0.97%] |
+| OOD ×1.0–2.0 (1,000 episodes) | 0 / 1000 | [0, 0.38%] |
+| all 3,400 | **5 / 3400 = 0.15%** | [0.06%, 0.34%] |
+
+- **Where:** 2 at 8 mm, 1 at 16 mm, 2 at 20 mm.
+- **Mechanism, the same in all five, and physical.** In every case the ID was read correctly (decoded = true ID)
+  and routed correctly (routed = correct location). The bag ended up in the *neighbouring bin of the correct
+  locker*:
+  - Four were released over the routed slot and then tumbled across a divider while settling. Replayed
+    bit-identically; `out/p1e_misfile_cabinet.png` shows the bag lying across into the next bin.
+  - One slipped out of the grasp during TRANSIT over the locker and fell into an adjacent bin.
+  - All five had large lateral belief errors (9–34 mm). An off-centre, tilted grasp plus the 2–6 cm release drop
+    (the hand can't enter the bin) lets the bag cross the low (0.108 m) divider.
+- **What still held:** **zero misreads in 3,400 episodes** (no wrong ID ever decoded), **zero verify mismatches**,
+  and **the custody record never wrote VERIFIED for a wrong location**. All five were logged FAILED (four as
+  "post-settle check failed: not inside the routed slot volume"). Caveat: that post-settle check reads ground truth
+  in simulation, so a real cell needs a slot-occupancy sensor (cabinet camera or load cell) to raise the same alert.
+- So the honest claim is **not** "failures are always refusals, never errors". It is: *identity errors are zero;
+  physical placement errors occur under pose error (0.4% at 2–20 mm, none at zero noise), and are never recorded as
+  a successful filing.*
+- **Remedies, recommended and deliberately NOT applied during measurement** (per the brief, tuning comes after the
+  curve):
+  - Raise the internal divider between slot_0/1 (and 2/3). It sits 0.13 m from the hand's x-extent, so it can be
+    raised without the clearance problem that pins the outer walls; it would have stopped 3 of the 5 crossings.
+  - Use the verify-scan image to measure the bag's in-hand offset and tilt, and refuse or re-grasp before releasing
+    an off-centre bag.
+  - Add a physical post-release slot check (cabinet camera) that raises a handler alert.
+
+### 2. Refusals, by cause
+- Zero noise: 3 / 1200, all `verify_no_read`, all cartons. Replayed: a carton with contents +40 mm off-centre
+  **pivoted 46° in the grasp** (the offset CoM at work), so the wrist camera saw the barcode steeply foreshortened;
+  the robot refused and returned the bag rather than guessing (`out/p1e_noread_wrist_cam_*.png`).
+- Position error 2–20 mm: 11 / 1200, all `verify_no_read`. No `no_decode` at the intake under pose error: the
+  scanner is fixed and pose error only changes the robot's belief.
+- OOD: `no_decode` at ×1.5–2.0 (1, 47, 69): long bags put the label outside the scanner's field of view (25 of 30
+  checked had the label centre off-frame; the view is sized for the in-envelope label positions). `verify_no_read`
+  at ×1.25–1.75 (5, 35, 13): labels beyond the wrist cameras' footprint.
+- `no_case_match` and `cabinet_full` never occur in natural episodes (all pool IDs are registered; full lockers are
+  emptied between episodes). They are exercised by `tests/test_workflow.py`.
+
+### 3. Completion
+- Zero noise: **1197 / 1200 = 99.75%** [99.27, 99.91].
+- Position σ (0, 2, 5, 8, 12, 16, 20 mm): **100, 100, 94.0, 82.0, 59.0, 44.0, 31.5%**. Below 95% at ≈ 4.5 mm, 80% at
+  ≈ 8.3 mm, 50% at ≈ 14.4 mm. Phase 0B, same σ, pose only: 100, 100, 97.5, 88.0, 75.5, 55.5, 39.0%. Lower
+  everywhere, as the brief expected (offset CoM, longer bags, verify scan).
+- Non-filed outcomes under pose error are overwhelmingly **execution failures** (368 / 1200), not refusals (11):
+  DESCEND dominates (a finger lands on the bag), then CLOSE, LIFT, and VERIFY (the bag landed outside the routed
+  slot: the misfile mechanism above, plus bags that ended on a divider).
+- OOD envelope ×1.0 / 1.25 / 1.5 / 1.75 / 2.0: **100 / 3.0 / 0 / 0 / 0%**, far steeper than Phase 0B (86% at ×1.25).
+  Bags are 20–24 cm to leave room for the label clear of the hand, so ×1.25 makes most of them longer than the
+  245 mm bin (133 INSERT failures) and heavier (23 slips); ×1.5+ exceeds the 80 mm finger stroke (DESCEND). The
+  envelope has no headroom.
+
+### 4. Scan rates
+- Intake, first attempt: 1200/1200 at zero noise, 1200/1200 under pose error (fixed camera), 95.4% overall only
+  because of the OOD label-out-of-frame cases. Re-scans were rarely needed.
+- Verify, first attempt: 99.58% at zero noise (1195/1200), 98.72% under pose error; with the retry: 99.75% and
+  98.72%. Verify mismatches: 0.
+- **Image degradation** (`scripts/scan_degradation.py`, 100 rendered intake frames per level, Gaussian blur + sensor
+  noise): read 100% up to 0.6 px blur, 92% at 1.0 px (≈ 0.5 module), 30% at 1.4 px, 0% from 1.8 px. **0 misreads in
+  700 degraded decodes**: Code128's checksum turns a bad image into a no-read (a refusal), never a wrong ID. The clean
+  100% is a renderer ceiling; the real read rate depends on optics and focus.
+
+### 5. Per class (zero noise) and physical metrics
+- Filed: phone 296/296, blade 328/328, garment 306/306, carton 267/270 (the three verify no-reads).
+- Carry tilt from the offset CoM: mean 2.9°, p95 9.3°, max 46.9° (carton mean 6.0°, garment 0.6°). Placement
+  error mean 1.4 mm, p95 5.6 mm, max 31 mm; cycle time mean 19.0 s, p95 20.7 s (a rail traverse on most episodes).
+- Grasp slip in transit stays rare: 0 at zero noise, ≤ 2/200 per noisy point.

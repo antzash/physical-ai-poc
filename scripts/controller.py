@@ -367,7 +367,8 @@ class PickPlaceController:
 
     def _scan_record(self, r):
         return {"camera": r.extra.get("camera"), "decoded": r.text, "sim_time": round(self.d.time, 3),
-                "method": r.method, "attempts": r.attempts}
+                "method": r.method, "attempts": r.attempts,
+                "region": [int(v) for v in r.region] if r.region is not None else None}
 
     def _scanned(self, r):
         self.scan_id = r.text
