@@ -2,6 +2,7 @@
 # The scene file must live beside panda.xml for asset paths to resolve, so it is un-ignored.
 models/panda/*
 !models/panda/evidence_room.xml
+!models/panda/evidence_intake.xml
 
 # Generated artefacts stay local; the manifest describing them is committed.
 out/*

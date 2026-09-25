@@ -26,6 +26,7 @@ SETTLE_AFTER = 1.0  # s after the cycle ends before verification
 REST_LIN_VEL = 0.01  # m/s
 REST_ANG_VEL = 0.2  # rad/s
 MAX_CYCLE_TIME = 40.0  # s of simulated time
+CARRY_PHASES = ("LIFT", "TRANSIT", "INSERT")
 BADGES = ["4471", "2208", "3915", "5102"]
 
 
@@ -47,6 +48,7 @@ class EpisodeResult:
     params: dict
     perception: dict  # noise spec and the episode's drawn (cached) error, for exact replay
     final_in_slot: bool  # ground truth after settling, regardless of verdict (a failed episode can land in-slot)
+    max_carry_tilt_deg: float  # ground truth: largest bag tilt while carried (LIFT..INSERT); offset-CoM tipping
 
     def to_dict(self):
         return asdict(self)
@@ -138,12 +140,15 @@ class IntakeStation:
 
         c = ctl.PickPlaceController(m, d, cls, slot, on_event=on_event, perception_error=perception_error)
         t0 = d.time
+        max_tilt_cos = 1.0
         while not c.done:
             if d.time - t0 > MAX_CYCLE_TIME:
                 c._fail(f"cycle exceeded {MAX_CYCLE_TIME:.0f}s")
                 break
             c.update()
             mujoco.mj_step(m, d)
+            if c.phase in CARRY_PHASES:
+                max_tilt_cos = min(max_tilt_cos, abs(d.xmat[item_body][8]))
             if frame_cb:
                 frame_cb(self, c)
         r = c.result
@@ -188,7 +193,7 @@ class IntakeStation:
                                         "yaw_sigma_deg": float(np.degrees(noise.yaw_sigma_rad)),
                                         "size_sigma_pct": noise.size_sigma_frac * 100},
                               "error": perception_error.to_dict(), "size_mult": size_mult, "mass_mult": mass_mult},
-                             bool(inside and at_rest))
+                             bool(inside and at_rest), round(float(np.degrees(np.arccos(max_tilt_cos))), 2))
 
 
 def main():

@@ -85,6 +85,10 @@ def summarise(results):
     summary["failed_but_in_slot"] = {"k": sum(r.final_in_slot for r in failed), "n": len(failed),
                                      "note": "failed episodes whose item nevertheless ended at rest inside the target "
                                              "slot (e.g. dropped during INSERT). Not counted as success."}
+    tilt = np.array([r.max_carry_tilt_deg for r in results if r.grasped]) if any(r.grasped for r in results) else np.array([np.nan])
+    summary["carry_tilt_deg"] = {"mean": float(np.mean(tilt)), "p95": float(np.percentile(tilt, 95)),
+                                 "max": float(np.max(tilt)),
+                                 "note": "largest bag tilt while carried (LIFT..INSERT), grasped episodes; offset-CoM tipping"}
     grasped = [r for r in results if r.grasped]
     summary["grasp_rate"] = rate(len(grasped), n)
     summary["grasp_slip"] = {**rate(sum(r.slipped for r in grasped), len(grasped)),
@@ -129,6 +133,9 @@ def print_table(summary, config):
           f"(all: mean {ct['all_mean']:.2f}s  p95 {ct['all_p95']:.2f}s)")
     print(f"placement error          mean {pe['mean'] * 1000:.1f} mm  p95 {pe['p95'] * 1000:.1f} mm  "
           f"max {pe['max'] * 1000:.1f} mm")
+    if "carry_tilt_deg" in summary:
+        tl = summary["carry_tilt_deg"]
+        print(f"carry tilt (CoM offset)  mean {tl['mean']:.1f}°  p95 {tl['p95']:.1f}°  max {tl['max']:.1f}°")
     print(f"custody chain            {'intact' if config['custody_chain_intact'] else 'BROKEN'}  "
           f"({config['custody_events']} events, {config['custody_log']})")
     print("=" * 78)

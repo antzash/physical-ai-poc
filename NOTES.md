@@ -478,3 +478,46 @@ Verified by rendering `demo_cam` (`out/scene.png`, `out/c_demo_transit.png`) and
   `record.py` now defaults to a timestamped filename so this cannot recur. Recorded in `out/ARTIFACTS.md`.
 - README rewritten around the conditions and the robustness result; `out/ARTIFACTS.md` lists the new video,
   sweep JSONs and charts.
+
+---
+
+# Phase 1 — The evidence intake workflow
+
+Governing rule (PHASE_1_BRIEF §1): **fail closed.** Never guess, never retry indefinitely, never fall back to the
+simulator's true item ID; refuse and leave the item for a human. Misfile rate is the headline metric.
+
+## Task A — Sealed bags with contents
+
+- **New scene file** `models/panda/evidence_intake.xml` (derived from `evidence_room.xml`). `evidence_room.xml` and
+  `panda.xml` are unchanged, so the Phase 0/0B scene still compiles. The code that runs it is at the new local tag
+  `phase0b` (`3556a34`).
+- **One unit type, the sealed evidence bag**, in four content classes: `phone`, `blade`, `garment`, `carton`. Each
+  class has one body (one active per episode, the others parked as before) with three geoms: the polythene outer bag
+  (box, the only colliding geom, translucent), the contents (visual only, massless) and the label (visual only,
+  massless, top face at the +x end). Checked in the compiled model: deleting the contents and label geoms leaves
+  mass and inertia bit-identical, and each bag's collision BVH is still one node.
+- **Sizes are set by the gripper and the verify scan.** Width stays ≤ ~67 mm (80 mm stroke). The label must start
+  ≥ 45 mm from the grasp centre (the hand body spans ±32 mm along x above it) so the wrist camera can see it. So
+  bags are long, narrow pouches, 20–24 cm by 4–6.7 cm, which is gripper-limited like the Phase 0 folder. A real
+  evidence bag is wider.
+- **Offset centre of mass**, as a fraction of the half-length along the long axis, sign random: phone and carton
+  0.15–0.45, blade 0.10–0.40, garment 0–0.12. Set via `body_ipos`; explicit box inertia about the CoM as before; the
+  contents geom moves to the CoM so the heavy end is visible. Recorded as `com_offset` in the episode params.
+- **MuJoCo detail:** bodies whose CoM equals their origin compile as "simple"/"sameframe". `mj_setConst` then
+  refuses a moved CoM, and kinematics would place it at the origin anyway. Bag bodies are compiled with
+  `simple=False` and `body_sameframe` reset. Verified: `xipos − xpos` equals the drawn offset in every episode.
+- The controller grasps at the bag's believed **geometric** centre (from the perception seam) and does not know
+  where the contents are. Class-specific rules for the old cylinder/folder were removed.
+
+### Finding: the offset CoM had no effect until an unrealistic friction parameter was corrected
+- First 60 episodes at zero noise: 60/60, and the heaviest, most offset cartons (0.3 N·m) tilted only ~1° in the
+  grasp. The items' torsional friction coefficient, inherited from my Phase 0 scene, was a flat 0.02 m. At 21 N per
+  pad that resists ~0.8 N·m, so no plausible contents could tip a bag.
+- Replaced by a physically derived value: coefficient = μ × effective friction radius of the ~17 mm square pad
+  (≈ 6.5 mm), i.e. 0.004–0.009 m for the randomised μ 0.6–1.4 (MuJoCo's default is 0.005). This removes an
+  artificial advantage; it is not tuning for a better number. The same cartons now tilt 4–15° while carried.
+- 200 episodes, zero noise, after the correction: **200/200** filed. The tipping shows up as placement error (mean
+  1.8 mm, p95 5.2 mm, max 13.9 mm, versus 1.1/2.4/4.4 mm with the 0.02 m coefficient), not failures. The bins
+  still accept a bag tilted up to ~15°. Whether it costs success under pose error is measured in Task E. Carry tilt
+  is now recorded per episode (`max_carry_tilt_deg`, ground truth) and summarised by `evaluate.py`.
+- `rl/env.py`'s scripted policy is generic again and still solves 12/12 through the action space; `check_env` passes.

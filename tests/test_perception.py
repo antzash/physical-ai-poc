@@ -79,7 +79,7 @@ def test_error_is_drawn_exactly_once_per_episode():
 
 def test_noise_reaches_the_controller_target():
     """With a known +20 mm x offset the controller's APPROACH goal is displaced by exactly that offset."""
-    m, d, cls, b, g = _placed_scene(seed=1007)  # a box
+    m, d, cls, b, g = _placed_scene(seed=1007)
     true_xy = d.xpos[b][:2].copy()
     err = PerceptionError(pos_offset=(0.02, 0.0, 0.0))
     c = controller.PickPlaceController(m, d, cls, "slot_0", perception_error=err)
@@ -108,7 +108,7 @@ def test_evaluator_judges_on_ground_truth():
 
         ok = st.run_episode(1007, slot="slot_1", noise=NoiseSpec(0.002))
         center, _ = scene.slot_volume(st.m, st.d, "slot_1")
-        true_err = float(np.linalg.norm(st.d.xpos[scene.body_id(st.m, "item_box")][:2] - center[:2]))
+        true_err = float(np.linalg.norm(st.d.xpos[scene.body_id(st.m, scene.item_body(ok.object_class))][:2] - center[:2]))
         assert ok.success and abs(ok.placement_error - round(true_err, 4)) < 1e-9
 
 

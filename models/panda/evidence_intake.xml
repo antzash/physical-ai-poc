@@ -1,0 +1,192 @@
+<mujoco model="evidence_intake">
+  <!--
+    Phase 1 evidence intake scene (sealed evidence bags). Derived from evidence_room.xml, which is kept unchanged
+    so the Phase 0/0B scene still compiles. Lives beside panda.xml so Menagerie's relative asset paths resolve.
+    The Panda base sits on the intake counter at the world origin; the counter top is z = 0 and the
+    room floor is z = -0.8. The `tcp` site is added to the hand body at load time (scripts/scene.py),
+    because MJCF cannot reopen a body declared in an included file.
+  -->
+  <include file="panda.xml"/>
+
+  <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
+
+  <statistic center="0.3 0.1 0.1" extent="1.2"/>
+
+  <visual>
+    <headlight diffuse="0.3 0.3 0.3" ambient="0.18 0.18 0.18" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="150" elevation="-25" offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.35 0.40 0.47" rgb2="0.08 0.09 0.11" width="512" height="3072"/>
+    <material name="floor_mat" rgba="0.33 0.34 0.35 1" specular="0" shininess="0" reflectance="0"/>
+    <material name="counter_body" rgba="0.36 0.38 0.42 1"/>
+    <material name="counter_top" rgba="0.66 0.67 0.69 1" specular="0.2"/>
+    <material name="intake_mat" rgba="0.95 0.75 0.15 1"/>
+    <!-- Opaque institutional grey, low specularity: reads as a steel evidence locker. -->
+    <material name="cabinet_body" rgba="0.45 0.47 0.48 1" specular="0.12" shininess="0.2"/>
+    <material name="cabinet_panel" rgba="0.53 0.55 0.56 1" specular="0.12" shininess="0.2"/>
+    <material name="cabinet_trim" rgba="0.36 0.37 0.38 1" specular="0.1" shininess="0.2"/>
+    <material name="cabinet_handle" rgba="0.70 0.71 0.72 1" specular="0.5" shininess="0.6"/>
+    <material name="slot_floor" rgba="0.30 0.31 0.32 1" specular="0.05"/>
+    <!-- Sealed evidence bags: translucent polythene outer, visible contents, white barcode label. -->
+    <material name="bag_poly" rgba="0.80 0.83 0.86 0.32" specular="0.6" shininess="0.8"/>
+    <material name="label_blank" rgba="0.97 0.97 0.95 1" specular="0.05"/>
+    <material name="contents_phone" rgba="0.10 0.10 0.12 1" specular="0.6" shininess="0.7"/>
+    <material name="contents_blade" rgba="0.72 0.74 0.77 1" specular="0.9" shininess="0.9"/>
+    <material name="contents_garment" rgba="0.20 0.26 0.46 1" specular="0.05"/>
+    <material name="contents_carton" rgba="0.72 0.48 0.26 1" specular="0.1"/>
+  </asset>
+
+  <default>
+    <default class="static">
+      <geom type="box" contype="1" conaffinity="1" condim="3" friction="0.8 0.005 0.0001"/>
+    </default>
+    <default class="item">
+      <!-- priority 1 makes the item's (randomised) friction govern its contacts, including with the finger pads;
+           with equal priorities MuJoCo takes the max, which would make friction randomisation a no-op. -->
+      <geom condim="4" priority="1" friction="1.2 0.02 0.0001" solref="0.004 1" solimp="0.95 0.99 0.001"/>
+    </default>
+    <default class="slot">
+      <site type="box" group="4" rgba="0.2 0.9 0.4 0.15"/>
+    </default>
+    <!-- Cabinet collision walls: unchanged physics, hidden (group 3, like Menagerie's collision meshes). -->
+    <default class="cab_collision">
+      <geom type="box" contype="1" conaffinity="1" condim="3" friction="0.8 0.005 0.0001" group="3"/>
+    </default>
+    <!-- Visual-only geometry: never collides, adds no mass or inertia. -->
+    <default class="visual_only">
+      <geom type="box" contype="0" conaffinity="0" density="0" group="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light name="key" pos="1.2 -1.0 2.2" dir="-0.45 0.35 -0.8" directional="true" castshadow="true"
+      diffuse="0.55 0.55 0.52"/>
+    <light name="fill" pos="-1.0 1.0 2.0" dir="0.4 -0.4 -0.8" directional="true" castshadow="false"
+      diffuse="0.25 0.27 0.30"/>
+
+    <geom name="floor" type="plane" pos="0 0 -0.8" size="0 0 0.05" material="floor_mat"/>
+
+    <!-- Intake counter. The arm is mounted on it at the origin; items are presented in the intake zone. -->
+    <body name="counter" pos="0.25 -0.125 0">
+      <geom name="counter_body" class="static" pos="0 0 -0.41" size="0.5 0.325 0.39" material="counter_body"/>
+      <geom name="counter_top" class="static" pos="0 0 -0.01" size="0.5 0.325 0.01" material="counter_top"/>
+      <!-- Visual-only intake zone marking (no collision). -->
+      <geom name="intake_zone" type="box" pos="0.25 0.025 0.0004" size="0.16 0.19 0.0004"
+        contype="0" conaffinity="0" material="intake_mat" rgba="0.95 0.75 0.15 0.35"/>
+    </body>
+
+    <!--
+      Cabinet: a 2x2 grid of open-topped storage bins on a base unit, to the arm's left (+y).
+      Built from thin static boxes: floor, back wall, front wall, two side walls, one divider along x
+      (the "vertical divider") and one along y (the "shelf"). There is deliberately no top panel:
+      a closed top with a horizontal shelf would make top-down insertion into the lower row impossible.
+      Each bin interior is 0.245 m (x) by 0.145 m (y) by 0.10 m deep.
+
+      The walls exist twice: hidden collision boxes (class cab_collision, identical to Phase 0 so the physics is
+      unchanged) and visual-only panels (class visual_only) that are thicker and, at the sides, taller, so the unit
+      reads as a steel locker. The front and bin back walls stay at 0.108 m: the 208 mm-wide Panda hand passes over
+      them at release with ~12 mm to spare, so they cannot be raised without changing the task.
+    -->
+    <body name="cabinet" pos="0.3 0.4 0">
+      <geom name="cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
+      <geom name="cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
+      <geom name="cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
+      <!-- Tall backboard, set back from the bins so the 0.21 m-wide Panda hand clears it over the rear slots. -->
+      <geom name="cab_backboard" class="cab_collision" pos="0 0.215 0.15" size="0.27 0.005 0.15"/>
+      <geom name="cab_front" class="cab_collision" pos="0 -0.165 0.05" size="0.27 0.005 0.05"/>
+      <geom name="cab_side_l" class="cab_collision" pos="-0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="cab_side_r" class="cab_collision" pos="0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="cab_divider" class="static" pos="0 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
+      <geom name="cab_shelf" class="static" pos="0 0 0.05" size="0.26 0.005 0.05" material="cabinet_panel"/>
+
+      <!-- Visual locker shell. Inner faces sit on the collision walls' inner faces, so bin interiors look unchanged. -->
+      <geom name="vis_carcass" class="visual_only" pos="0 0.025 -0.4" size="0.292 0.217 0.4" material="cabinet_body"/>
+      <geom name="vis_front" class="visual_only" pos="0 -0.1765 0.054" size="0.292 0.0165 0.054"
+        material="cabinet_panel"/>
+      <geom name="vis_front_cap" class="visual_only" pos="0 -0.1765 0.1095" size="0.292 0.0175 0.0015"
+        material="cabinet_trim"/>
+      <geom name="vis_side_l" class="visual_only" pos="-0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="vis_side_r" class="visual_only" pos="0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="vis_backboard" class="visual_only" pos="0 0.226 0.15" size="0.292 0.016 0.15"
+        material="cabinet_panel"/>
+      <geom name="vis_backboard_cap" class="visual_only" pos="0 0.226 0.3015" size="0.294 0.018 0.0015"
+        material="cabinet_trim"/>
+      <!-- Locker doors on the two faces the demo camera sees (+x side, -y front), with pull handles. -->
+      <geom name="vis_door_x1" class="visual_only" pos="0.2925 -0.075 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="vis_door_x2" class="visual_only" pos="0.2925 0.125 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="vis_handle_x1" class="visual_only" pos="0.297 0.005 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="vis_handle_x2" class="visual_only" pos="0.297 0.045 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="vis_door_y" class="visual_only" pos="0 -0.1935 -0.21" size="0.27 0.002 0.17"
+        material="cabinet_trim"/>
+      <geom name="vis_handle_y" class="visual_only" pos="0 -0.198 -0.07" size="0.06 0.004 0.004"
+        material="cabinet_handle"/>
+      <geom name="vis_plinth" class="visual_only" pos="0 0.025 -0.78" size="0.296 0.221 0.02"
+        material="cabinet_trim"/>
+
+      <!--
+        Slot sites. Each is a box site whose pos is the centre of the bin's usable volume and whose
+        size is the half-extent of that volume, so placement checks read the slot volume from the model.
+      -->
+      <site name="slot_0" class="slot" pos="-0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="slot_1" class="slot" pos="0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="slot_2" class="slot" pos="-0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="slot_3" class="slot" pos="0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+    </body>
+
+    <!--
+      Evidence units: SEALED EVIDENCE BAGS. The officer seals and labels; the robot only moves the sealed unit.
+      One body per content class (only one is active per episode; see randomise.py). Each body has three geoms:
+        item_<c>_geom      the outer polythene bag: the ONLY colliding geom
+        item_<c>_contents  what is inside: visual only, massless (contype/conaffinity 0, density 0)
+        item_<c>_label     the barcode label at the +x end of the top face: visual only, massless
+      The label sits at one end, clear of the hand's +-32 mm footprint over the grasp centre, so the wrist camera
+      can read it during the verify scan. Mass, inertia and the (offset) centre of mass are set per episode by
+      randomise.py via body_mass / body_inertia / body_ipos; the masses below are placeholders.
+    -->
+    <body name="item_phone" pos="0.52 -0.18 0.012">
+      <freejoint name="item_phone_joint"/>
+      <geom name="item_phone_geom" class="item" type="box" size="0.105 0.030 0.012" mass="0.25" material="bag_poly"/>
+      <geom name="item_phone_contents" class="visual_only" size="0.036 0.024 0.006" material="contents_phone"/>
+      <geom name="item_phone_label" class="visual_only" pos="0.072 0 0.0126" size="0.028 0.026 0.0006"
+        material="label_blank"/>
+    </body>
+    <body name="item_blade" pos="0.60 0.00 0.010">
+      <freejoint name="item_blade_joint"/>
+      <geom name="item_blade_geom" class="item" type="box" size="0.110 0.024 0.010" mass="0.2" material="bag_poly"/>
+      <geom name="item_blade_contents" class="visual_only" size="0.085 0.011 0.003" material="contents_blade"/>
+      <geom name="item_blade_label" class="visual_only" pos="0.077 0 0.0106" size="0.028 0.022 0.0006"
+        material="label_blank"/>
+    </body>
+    <body name="item_garment" pos="0.42 -0.30 0.022">
+      <freejoint name="item_garment_joint"/>
+      <geom name="item_garment_geom" class="item" type="box" size="0.105 0.032 0.022" mass="0.25" material="bag_poly"/>
+      <geom name="item_garment_contents" class="visual_only" size="0.090 0.027 0.017" material="contents_garment"/>
+      <geom name="item_garment_label" class="visual_only" pos="0.072 0 0.0226" size="0.028 0.026 0.0006"
+        material="label_blank"/>
+    </body>
+    <body name="item_carton" pos="0.64 -0.30 0.024">
+      <freejoint name="item_carton_joint"/>
+      <geom name="item_carton_geom" class="item" type="box" size="0.100 0.031 0.024" mass="0.4" material="bag_poly"/>
+      <geom name="item_carton_contents" class="visual_only" size="0.050 0.026 0.019" material="contents_carton"/>
+      <geom name="item_carton_label" class="visual_only" pos="0.067 0 0.0246" size="0.028 0.026 0.0006"
+        material="label_blank"/>
+    </body>
+
+    <!-- Invisible look-at targets for the fixed cameras. -->
+    <body name="demo_target" pos="0.30 0.10 0.22"/>
+
+    <camera name="demo_cam" pos="1.75 -1.25 1.2" mode="targetbody" target="demo_target" fovy="42"/>
+    <camera name="topdown_cam" pos="0.5 -0.12 1.9" xyaxes="0 -1 0 1 0 0" fovy="22"/>
+    <camera name="cabinet_cam" pos="0.3 0.22 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
+  </worldbody>
+</mujoco>

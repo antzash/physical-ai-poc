@@ -211,12 +211,11 @@ def scripted_action(env):
         dy = np.clip((ik.nearest_equivalent_yaw(goal_yaw, env.target_yaw) - env.target_yaw) / MAX_DYAW, -1, 1)
         return np.array([*dp, dy, grip], dtype=np.float32), np.linalg.norm(goal - tcp) < 0.008
 
-    grasp_yaw = yaw if env.item_cls == "cylinder" else iyaw + np.pi / 2
+    grasp_yaw = iyaw + np.pi / 2
     if not hasattr(env, "_grasp_yaw"):
         env._grasp_yaw = ik.nearest_equivalent_yaw(grasp_yaw, yaw)
     center = d.geom_xpos[env.item_geom][2]
-    gz = max(top - 0.006 if env.item_cls == "folder" else center, FINGERTIP_BELOW_TCP + 0.004,
-             top + 0.006 - HAND_ABOVE_TCP)
+    gz = max(center, FINGERTIP_BELOW_TCP + 0.004, top + 0.006 - HAND_ABOVE_TCP)
     if stage == "approach":
         act, done = toward(np.array([item[0], item[1], top + 0.08]), env._grasp_yaw, -1)
         env._stage = "descend" if done else stage

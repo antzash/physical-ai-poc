@@ -219,8 +219,7 @@ class PickPlaceController:
         return self.d.qpos[self.finger_qadr]
 
     def _observe(self):
-        return observe(self.m, self.d, self.item_body, self.item_geom, self.perception_error,
-                       "cylinder" if self.item_cls == "cylinder" else "other")
+        return observe(self.m, self.d, self.item_body, self.item_geom, self.perception_error, "box")
 
     def _enter(self, phase):
         self.phase = phase
@@ -275,10 +274,7 @@ class PickPlaceController:
         obs = self._observe()
         top = obs.position[2] + obs.vertical_half_extent
         item_pos = obs.position
-        if self.item_cls == "cylinder":
-            self.grasp_yaw = self._cmd_pose[1]
-        else:
-            self.grasp_yaw = obs.yaw + np.pi / 2  # close across the item's short axis
+        self.grasp_yaw = obs.yaw + np.pi / 2  # close across the bag's short axis
         self.grasp_yaw = ik.nearest_equivalent_yaw(self.grasp_yaw, self._cmd_pose[1])
         dur = self._plan([((item_pos[0], item_pos[1], top + PREGRASP_CLEARANCE), self.grasp_yaw)], CART_SPEED)
         self.timeout = dur + 2.0
@@ -292,10 +288,9 @@ class PickPlaceController:
         """TCP height for the grasp, per object class, limited by what the gripper geometry allows."""
         center = obs.position[2]
         top = center + obs.vertical_half_extent
-        if self.item_cls == "folder":
-            desired = top - 0.006  # pinch near the top face
-        else:
-            desired = center  # box: centre; bag: widest section; cylinder: mid-height if the hand allows
+        # Grasp at the bag's believed geometric centre. An offset centre of mass is not compensated for: the
+        # controller does not know where the contents are, so a heavy end tips the bag in the grasp.
+        desired = center
         floor_limit = scene.COUNTER_TOP_Z + FINGERTIP_BELOW_TCP + TIP_CLEARANCE
         hand_limit = top + HAND_CLEARANCE - HAND_ABOVE_TCP  # hand body must stay above the item's top
         return max(desired, floor_limit, hand_limit)

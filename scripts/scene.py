@@ -6,7 +6,8 @@ import mujoco
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-SCENE_XML = ROOT / "models" / "panda" / "evidence_room.xml"
+SCENE_XML = ROOT / "models" / "panda" / "evidence_intake.xml"  # Phase 1: sealed evidence bags
+PHASE0B_SCENE_XML = ROOT / "models" / "panda" / "evidence_room.xml"  # kept unchanged; runs with code at tag phase0b
 OUT_DIR = ROOT / "out"
 
 ARM_JOINTS = [f"joint{i}" for i in range(1, 8)]
@@ -17,7 +18,7 @@ FINGER_BODIES = ["left_finger", "right_finger"]
 GRIPPER_OPEN = 255.0
 GRIPPER_CLOSED = 0.0
 
-ITEM_CLASSES = ["box", "bag", "cylinder", "folder"]
+ITEM_CLASSES = ["phone", "blade", "garment", "carton"]  # content classes of the sealed evidence bag
 SLOT_NAMES = [f"slot_{i}" for i in range(4)]
 COUNTER_TOP_Z = 0.0
 
@@ -48,6 +49,11 @@ def build_spec(path=SCENE_XML):
     gain[0] = GRIPPER_KP * 0.04 / GRIPPER_OPEN
     bias[1], bias[2] = -GRIPPER_KP, -GRIPPER_KV
     grip.gainprm, grip.biasprm = gain, bias
+    # Bag bodies get a randomised centre-of-mass offset at runtime (body_ipos). MuJoCo compiles bodies whose inertial
+    # frame equals the body frame as "simple"/"sameframe" and then refuses (or ignores) a moved CoM, so opt out here;
+    # randomise.py also sets body_sameframe to 0 so kinematics computes the true CoM position.
+    for cls in ITEM_CLASSES:
+        spec.body(item_body(cls)).simple = False
     for body_name in FINGER_BODIES:
         for geom in spec.body(body_name).geoms:
             if geom.contype or geom.conaffinity:
@@ -130,6 +136,10 @@ def item_geom(cls):
 
 def item_joint(cls):
     return f"item_{cls}_joint"
+
+
+def item_label(cls):
+    return f"item_{cls}_label"
 
 
 def body_geoms(model, bid):
