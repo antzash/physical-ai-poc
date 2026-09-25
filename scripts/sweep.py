@@ -9,6 +9,7 @@ Sweeps (each point gets a fresh, non-overlapping seed range: 100000 * sweep_inde
     combined   paired (k mm, k °)
     size       size σ ∈ {0,5,10,20,30} %, pose perfect (secondary axis)
     ood        size and mass envelope × {1.0,1.25,1.5,1.75,2.0}, zero noise
+    baseline   zero noise, 5 x 200 fresh seeds (a 1000-episode zero-noise estimate)
     yaw_wide   yaw σ ∈ {30,45,60,90} °: extends the yaw sweep, which is still ~96% at 20° (the yaw cliff lies beyond)
 
 This is a MEASUREMENT. Nothing here tunes the controller. Writes out/robustness_<ts>.json and per-point custody logs
@@ -34,8 +35,10 @@ SWEEPS = {
     "size": [{"size_pct": v} for v in (0, 5, 10, 20, 30)],
     "ood": [{"mult": v} for v in (1.0, 1.25, 1.5, 1.75, 2.0)],
     "yaw_wide": [{"pos_mm": 0, "yaw_deg": v} for v in (30, 45, 60, 90)],
+    "baseline": [{"pos_mm": 0, "yaw_deg": 0, "rep": i} for i in range(5)],  # zero noise, 5 x fresh seeds
 }
-SWEEP_INDEX = {"position": 1, "yaw": 2, "combined": 3, "size": 4, "ood": 5, "yaw_wide": 6}
+SWEEP_INDEX = {"position": 1, "yaw": 2, "combined": 3, "size": 4, "ood": 5, "yaw_wide": 6, "baseline": 7}
+# Phase 1 re-measure (PHASE_1_BRIEF Task E): python3 scripts/sweep.py --only baseline position ood
 
 
 def _run_point(sweep, i, point, episodes, out_dir):

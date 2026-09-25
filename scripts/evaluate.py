@@ -52,48 +52,74 @@ def _git_commit():
         return None
 
 
+REFUSAL_CAUSES = ["no_decode", "no_case_match", "cabinet_full", "verify_mismatch", "verify_no_read"]
+
+
+def _stats(values):
+    v = np.array([x for x in values if x is not None], dtype=float)
+    if v.size == 0:
+        return {"mean": float("nan"), "p95": float("nan"), "max": float("nan"), "n": 0}
+    return {"mean": float(v.mean()), "p95": float(np.percentile(v, 95)), "max": float(v.max()), "n": int(v.size)}
+
+
 def summarise(results):
+    """Phase 1 metrics. Misfiles first: an item at rest in any slot other than the one its TRUE id routes to."""
     n = len(results)
-    ok = [r for r in results if r.success]
-    summary = {"overall": rate(len(ok), n)}
-    summary["by_class"] = {
-        c: rate(sum(r.success for r in results if r.object_class == c), sum(r.object_class == c for r in results))
-        for c in scene.ITEM_CLASSES
-    }
-    summary["by_slot"] = {
-        s: rate(sum(r.success for r in results if r.slot == s), sum(r.slot == s for r in results))
-        for s in scene.SLOT_NAMES
-    }
+    summary = {"misfile": {**rate(sum(r.misfile for r in results), n),
+                           "note": "item at rest in a slot other than the one its true ID routes to (ground truth)"}}
+    summary["misread"] = {**rate(sum(r.decoded_id is not None and r.decoded_id != r.true_item_id for r in results), n),
+                          "note": "intake decode returned a string other than the true item ID"}
+    summary["completion"] = {**rate(sum(r.success for r in results), n),
+                             "note": "filed and verified in the routed slot without human intervention"}
+    summary["refusal"] = rate(sum(r.outcome == "refused" for r in results), n)
+    summary["refusal_by_cause"] = {c: rate(sum(r.refusal_cause == c for r in results), n) for c in REFUSAL_CAUSES}
+    summary["execution_failure"] = rate(sum(r.outcome == "failed" for r in results), n)
     phase_order = PHASES + ["VERIFY"]
-    fails = Counter(r.failure_phase for r in results if not r.success)
+    fails = Counter(r.failure_phase for r in results if r.outcome == "failed")
     summary["failures_by_phase"] = {p: fails[p] for p in sorted(fails, key=lambda p: phase_order.index(p)
                                                                  if p in phase_order else 99)}
     summary["failure_reasons"] = dict(Counter(f"{r.failure_phase}: {r.failure_reason}" for r in results
-                                              if not r.success).most_common())
-    t_ok = np.array([r.cycle_time for r in ok]) if ok else np.array([np.nan])
-    t_all = np.array([r.cycle_time for r in results])
-    summary["cycle_time_s"] = {
-        "successful_mean": float(np.mean(t_ok)), "successful_p95": float(np.percentile(t_ok, 95)),
-        "all_mean": float(np.mean(t_all)), "all_p95": float(np.percentile(t_all, 95)),
-        "note": "simulated seconds from HOME to return-to-home (or to the failure)",
+                                              if r.outcome == "failed").most_common())
+    # Scan rates, from the controller's own scan records.
+    intake = [r.scan.get("intake", {}).get("decoded") is not None for r in results if "intake" in r.scan]
+    with_rescan = [bool(r.scan.get("intake", {}).get("decoded") or r.scan.get("rescan", {}).get("decoded"))
+                   for r in results if "intake" in r.scan]
+    ver = [r for r in results if "verify" in r.scan]
+    ver_first = [r.scan["verify"].get("decoded") is not None for r in ver]
+    ver_total = [bool(r.scan["verify"].get("decoded") or r.scan.get("verify_retry", {}).get("decoded")) for r in ver]
+    summary["scan"] = {
+        "intake_first": rate(sum(intake), len(intake)),
+        "intake_with_rescan": rate(sum(with_rescan), len(with_rescan)),
+        "rescans": sum("rescan" in r.scan for r in results),
+        "verify_first": rate(sum(ver_first), len(ver_first)),
+        "verify_with_retry": rate(sum(ver_total), len(ver_total)),
+        "verify_match_of_read": rate(sum(r.scan.get("verify_match") is True for r in ver),
+                                     sum(r.scan.get("verify_match") is not None for r in ver)),
     }
-    err = np.array([r.placement_error for r in ok]) if ok else np.array([np.nan])
-    summary["placement_error_m"] = {"mean": float(np.mean(err)), "p95": float(np.percentile(err, 95)),
-                                    "max": float(np.max(err)),
-                                    "note": "horizontal distance, item centre to slot centre, successful episodes"}
-    failed = [r for r in results if not r.success]
-    summary["failed_but_in_slot"] = {"k": sum(r.final_in_slot for r in failed), "n": len(failed),
-                                     "note": "failed episodes whose item nevertheless ended at rest inside the target "
-                                             "slot (e.g. dropped during INSERT). Not counted as success."}
-    tilt = np.array([r.max_carry_tilt_deg for r in results if r.grasped]) if any(r.grasped for r in results) else np.array([np.nan])
-    summary["carry_tilt_deg"] = {"mean": float(np.mean(tilt)), "p95": float(np.percentile(tilt, 95)),
-                                 "max": float(np.max(tilt)),
-                                 "note": "largest bag tilt while carried (LIFT..INSERT), grasped episodes; offset-CoM tipping"}
     grasped = [r for r in results if r.grasped]
-    summary["grasp_rate"] = rate(len(grasped), n)
+    summary["grasp_rate"] = rate(len(grasped), sum(r.outcome != "refused" or r.grasped for r in results))
     summary["grasp_slip"] = {**rate(sum(r.slipped for r in grasped), len(grasped)),
-                             "note": "of episodes with a verified grasp after LIFT, fraction that then lost "
-                                     "two-finger contact before release"}
+                             "note": "of verified grasps, fraction that then lost two-finger contact"}
+    summary["by_class"] = {}
+    for c in scene.ITEM_CLASSES:
+        rc = [r for r in results if r.object_class == c]
+        summary["by_class"][c] = {
+            "completion": rate(sum(r.success for r in rc), len(rc)),
+            "misfile": rate(sum(r.misfile for r in rc), len(rc)),
+            "refusal": rate(sum(r.outcome == "refused" for r in rc), len(rc)),
+            "grasp_slip": rate(sum(r.slipped for r in rc if r.grasped), sum(r.grasped for r in rc)),
+            "cycle_time_s": _stats([r.cycle_time for r in rc if r.success]),
+            "placement_error_m": _stats([r.placement_error for r in rc if r.success]),
+            "carry_tilt_deg": _stats([r.max_carry_tilt_deg for r in rc if r.grasped]),
+        }
+    summary["by_cabinet"] = {cab: rate(sum(r.success for r in results if (r.correct_location or "").startswith(cab)),
+                                       sum((r.correct_location or "").startswith(cab) for r in results))
+                             for cab in scene.CABINETS}
+    summary["cycle_time_s"] = {**_stats([r.cycle_time for r in results if r.success]),
+                               "note": "simulated seconds, IDLE to HOME, filed episodes"}
+    summary["placement_error_m"] = _stats([r.placement_error for r in results if r.success])
+    summary["carry_tilt_deg"] = _stats([r.max_carry_tilt_deg for r in grasped])
+    summary["overall"] = summary["completion"]  # alias kept for the Phase 0B plotting and sweep code
     return summary
 
 
@@ -104,41 +130,47 @@ def _pct(r):
 
 
 def print_table(summary, config):
-    print("\n" + "=" * 78)
+    print("\n" + "=" * 86)
     print(f"EVALUATION  episodes={config['episodes']}  seeds {config['seed']}..{config['seed'] + config['episodes'] - 1}"
           f"  commit={config['git_commit']}  wall={config['wall_time_s']:.0f}s")
     print(f"perception: {config['perception']}   size×{config['size_mult']:g}  mass×{config['mass_mult']:g}")
-    print("=" * 78)
-    print(f"{'overall success':<22}{_pct(summary['overall'])}")
-    print(f"{'grasp success':<22}{_pct(summary['grasp_rate'])}")
-    print(f"{'grasp slip (of grasped)':<22}{_pct(summary['grasp_slip'])}")
-    print("-" * 78)
-    print("success by object class            95% CI (Wilson)")
-    for c, r in summary["by_class"].items():
-        print(f"  {c:<20}{_pct(r)}")
-    print("success by slot")
-    for s, r in summary["by_slot"].items():
-        print(f"  {s:<20}{_pct(r)}")
-    print("-" * 78)
-    print("failures by phase")
-    if not summary["failures_by_phase"]:
-        print("  (none)")
-    for p, k in summary["failures_by_phase"].items():
-        print(f"  {p:<20}{k}")
+    print("=" * 86)
+    print(f"{'MISFILES':<26}{_pct(summary['misfile'])}   <- headline safety metric, target 0")
+    print(f"{'misreads (decode != true)':<26}{_pct(summary['misread'])}")
+    print(f"{'completion (filed)':<26}{_pct(summary['completion'])}")
+    print(f"{'refused':<26}{_pct(summary['refusal'])}")
+    for c, r in summary["refusal_by_cause"].items():
+        if r["k"]:
+            print(f"    {c:<22}{_pct(r)}")
+    print(f"{'execution failures':<26}{_pct(summary['execution_failure'])}")
     for reason, k in summary["failure_reasons"].items():
         print(f"    {k:3d} x {reason}")
-    print("-" * 78)
-    ct, pe = summary["cycle_time_s"], summary["placement_error_m"]
-    print(f"cycle time (successful)  mean {ct['successful_mean']:.2f}s  p95 {ct['successful_p95']:.2f}s   "
-          f"(all: mean {ct['all_mean']:.2f}s  p95 {ct['all_p95']:.2f}s)")
-    print(f"placement error          mean {pe['mean'] * 1000:.1f} mm  p95 {pe['p95'] * 1000:.1f} mm  "
-          f"max {pe['max'] * 1000:.1f} mm")
-    if "carry_tilt_deg" in summary:
-        tl = summary["carry_tilt_deg"]
-        print(f"carry tilt (CoM offset)  mean {tl['mean']:.1f}°  p95 {tl['p95']:.1f}°  max {tl['max']:.1f}°")
+    print("-" * 86)
+    sc = summary["scan"]
+    print(f"scan  intake first attempt  {_pct(sc['intake_first'])}")
+    print(f"      intake incl. re-scan  {_pct(sc['intake_with_rescan'])}   ({sc['rescans']} re-scans)")
+    print(f"      verify first attempt  {_pct(sc['verify_first'])}")
+    print(f"      verify incl. retry    {_pct(sc['verify_with_retry'])}")
+    print(f"      verify match of reads {_pct(sc['verify_match_of_read'])}")
+    print(f"grasp success             {_pct(summary['grasp_rate'])}")
+    print(f"grasp slip (of grasped)   {_pct(summary['grasp_slip'])}")
+    print("-" * 86)
+    print("by content class           completion                        misfile   cycle(s)  place(mm)  tilt(deg)")
+    for c, r in summary["by_class"].items():
+        print(f"  {c:<10}{_pct(r['completion']):>44}  {r['misfile']['k']:>3}/{r['misfile']['n']:<4}"
+              f"{r['cycle_time_s']['mean']:7.1f}  {1000 * r['placement_error_m']['mean']:7.1f}  "
+              f"{r['carry_tilt_deg']['mean']:7.1f}")
+    print("by cabinet (true route)")
+    for cab, r in summary["by_cabinet"].items():
+        print(f"  {cab:<10}{_pct(r)}")
+    print("-" * 86)
+    ct, pe, tl = summary["cycle_time_s"], summary["placement_error_m"], summary["carry_tilt_deg"]
+    print(f"cycle time (filed)       mean {ct['mean']:.1f}s  p95 {ct['p95']:.1f}s")
+    print(f"placement error          mean {pe['mean'] * 1000:.1f} mm  p95 {pe['p95'] * 1000:.1f} mm  max {pe['max'] * 1000:.1f} mm")
+    print(f"carry tilt (CoM offset)  mean {tl['mean']:.1f}°  p95 {tl['p95']:.1f}°  max {tl['max']:.1f}°")
     print(f"custody chain            {'intact' if config['custody_chain_intact'] else 'BROKEN'}  "
           f"({config['custody_events']} events, {config['custody_log']})")
-    print("=" * 78)
+    print("=" * 86)
 
 
 def run_evaluation(episodes, seed, noise=NoiseSpec(), size_mult=1.0, mass_mult=1.0, log_path=None, quiet=True,
