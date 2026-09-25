@@ -9,6 +9,7 @@ Sweeps (each point gets a fresh, non-overlapping seed range: 100000 * sweep_inde
     combined   paired (k mm, k °)
     size       size σ ∈ {0,5,10,20,30} %, pose perfect (secondary axis)
     ood        size and mass envelope × {1.0,1.25,1.5,1.75,2.0}, zero noise
+    yaw_wide   yaw σ ∈ {30,45,60,90} °: extends the yaw sweep, which is still ~96% at 20° (the yaw cliff lies beyond)
 
 This is a MEASUREMENT. Nothing here tunes the controller. Writes out/robustness_<ts>.json and per-point custody logs
 under out/sweep_<ts>/. Plot with scripts/plot_robustness.py.
@@ -32,8 +33,9 @@ SWEEPS = {
     "combined": [{"pos_mm": v, "yaw_deg": v} for v in LEVELS],
     "size": [{"size_pct": v} for v in (0, 5, 10, 20, 30)],
     "ood": [{"mult": v} for v in (1.0, 1.25, 1.5, 1.75, 2.0)],
+    "yaw_wide": [{"pos_mm": 0, "yaw_deg": v} for v in (30, 45, 60, 90)],
 }
-SWEEP_INDEX = {"position": 1, "yaw": 2, "combined": 3, "size": 4, "ood": 5}
+SWEEP_INDEX = {"position": 1, "yaw": 2, "combined": 3, "size": 4, "ood": 5, "yaw_wide": 6}
 
 
 def _run_point(sweep, i, point, episodes, out_dir):

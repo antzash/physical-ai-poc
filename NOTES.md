@@ -313,3 +313,106 @@ available but pointless for small MLPs).
 - Sample-efficiency levers that don't need new compute: bootstrapping from the scripted controller (it is a free,
   ~100% demonstrator for behaviour cloning / demo-augmented RL), curriculum over the randomisation ranges, and
   HER-style goal relabelling for the slot target.
+
+---
+
+# Phase 0B
+
+## Task A — Provenance and backup
+
+- `milestones-backup` pushed to `origin`; annotated tags `m0`–`m7` on the milestone commits, pushed. `m5` sits on
+  `9630991` (the end of M5); the headline numbers it cites were produced by the code at `e893af9`, its parent.
+- `out/ARTIFACTS.md` (committed via a `.gitignore` exception) lists every artefact worth keeping, the command and
+  commit that produced it, size and SHA-256 prefix. It flags four early eval JSONs that are stamped `19a7653` but ran
+  on uncommitted harness code (the `-dirty` stamp was only added at `e893af9`).
+
+## Task B — Perception seam and robustness
+
+### The seam (`scripts/perception.py`)
+- `draw_error(NoiseSpec, rng)` runs **once per episode** at reset and returns a frozen `PerceptionError` (position
+  offset per axis x/y/z, yaw offset, per-axis size scale). `observe(model, data, body, geom, error, kind)` returns
+  an `ItemObservation` = ground truth + that cached error. Deviation from the brief's signature: `observe` takes the
+  already-drawn error instead of `(noise_spec, rng)`, so per-call re-sampling is impossible by construction.
+- The error comes from its own RNG stream (`[seed, 2]`), so physics draws are untouched; it is recorded per episode
+  (`perception.error` in the eval JSON) for exact replay.
+- Controller reads routed through it: APPROACH target and yaw, DESCEND target, grasp height (believed centre and
+  believed half-height), and the item-derived part of the release height (believed bottom relative to the commanded
+  grasp height). Bin wall height stays ground truth (the cabinet is known, not perceived).
+- **Evaluator stays on ground truth**, and `tests/test_perception.py` (7 tests) proves it: zero error = exact truth;
+  the same offset on every read; noise never moves the item (qpos unchanged); the error is drawn exactly once per
+  episode; a +20 mm belief offset displaces the APPROACH goal by exactly 20 mm; a 60 mm offset makes the robot miss
+  and the episode is judged FAILED with no PLACED/VERIFIED; placement error equals the true distance; the judging
+  code (grasp predicates, `_check_hold`, VERIFY block, evaluate.py) contains no observation reads.
+- **Zero-noise regression check:** 20 headline-run episodes replayed through the seam — box, bag and folder are
+  bit-identical to Phase 0; the 9 cylinders differ by a few ms of cycle time and < 1 mm of placement error (all still
+  succeed), because a tall bottle's release height now uses the *believed* bottom rather than the true in-hand
+  geometry. This is the seam doing what it should, not a regression.
+
+### Measurement setup
+- `python3 scripts/sweep.py` (commit `ed19f01`, clean): 200 episodes per point, fresh seed range per point
+  (100000·sweep + 1000·point), 8 worker processes, 450 s for 6200 episodes. `yaw_wide` (30–90°) was added after
+  seeing the yaw curve still at 96% at 20°; it ran at `ed19f01-dirty` where the only change is its entry in
+  `SWEEPS` (no controller change).
+- Position noise is per-axis σ on x, y **and z** (depth error is real), yaw σ, and size σ per axis.
+- Data: `out/robustness_20260925T083332Z.json` + `out/robustness_20260925T084337Z.json` (yaw_wide).
+  Charts: `python3 scripts/plot_robustness.py <both jsons>` → `out/robustness_curve.png` (position, headline),
+  `robustness_yaw.png`, `robustness_combined.png`, `robustness_size.png`, `robustness_ood.png`,
+  `robustness_overview.png` (2×2). Custody chains intact at every point.
+- Nothing in the controller, grasp heuristics, clearances or randomisation ranges was changed for this measurement.
+
+### Results (overall success, 200 episodes per point)
+
+| σ | 0 | 2 | 5 | 8 | 12 | 16 | 20 |
+|---|---|---|---|---|---|---|---|
+| position (mm) | 100.0 | 100.0 | 97.5 | 88.0 | 75.5 | 55.5 | 39.0 |
+| yaw (°) | 100.0 | 100.0 | 100.0 | 100.0 | 100.0 | 97.0 | 96.0 |
+| combined (k mm + k°) | 100.0 | 100.0 | 97.5 | 83.0 | 61.0 | 40.5 | 35.0 |
+
+Yaw extension: 30° 85.0, 45° 73.5, 60° 63.5, 90° 61.0. Size-estimate σ 0/5/10/20/30 %: 99.5 / 100 / 98.5 / 95.0 / 94.0.
+OOD envelope ×1.0/1.25/1.5/1.75/2.0: 99.5 / 86.0 / 38.5 / 12.5 / 2.0.
+
+### Headline findings
+- **Where it breaks (position σ per axis, linear interpolation between points):** below **95% at ≈ 5.8 mm**,
+  below **80% at ≈ 10.6 mm**, below **50% at ≈ 17.3 mm**. Combined position+yaw: 95% at ≈ 5.5, 80% at ≈ 8.5, 50%
+  at ≈ 14.1. Across the 3–10 mm band (the brief's stated range for a competent RGB-D estimator on a known rigid
+  object — an assumption, not something measured here) success falls from ~99% to ~82%: **the grasp tolerance sits
+  inside, not comfortably below, what real perception would supply.**
+- **Position dominates; yaw barely matters.** Yaw σ stays ≥ 95% up to ≈ 21° and crosses 80% only at ≈ 37°; it never
+  reaches 50% (plateau ~60%) because the gripper is symmetric under a half turn and cylinders ignore yaw by design.
+  Pooled over episodes by the *actual* drawn error: non-cylinder items succeed 100% below 20° of yaw error, 85% at
+  30–40°, 37% at 40–50°, ~0% beyond 50°. Items do **not** self-align in the jaws (measured: 26° misalignment before
+  CLOSE, 25.5° after) — they are carried crooked and still fit the bin; failure comes when the rotated footprint
+  across the jaws exceeds the 80 mm stroke and a finger lands on the item.
+- **Tolerance to the actual error:** pooled position-sweep episodes succeed 99% below 2 mm of horizontal error, 97%
+  at 2–5, 96% at 5–8, 90% at 8–11, 86% at 11–14, 68% at 14–18, 54% at 18–24 mm. With depth error < 3 mm the grasp
+  tolerates ~8 mm horizontally at 100% and 11–14 mm at 94%; depth error beyond ~10 mm hurts on its own.
+- **Which class degrades first:** under position noise the **folder** (79% at 8 mm, while others are ~90%) — it is
+  only ~6 cm wide in an 8 cm stroke (≈1 cm lateral margin per side) and is pinched a few mm above the counter, so
+  both lateral and depth error bite. Next the **cylinder** (64% at 12 mm, 26% at 20 mm) — the tallest item, grasped
+  as high as the hand allows, so a depth error drives the hand body into the bottle top; it is also the only class
+  hurt by size-estimate error (77% at 30%), since its grasp height depends on believed height. The **bag** degrades
+  last (72% at 16 mm): its rounded edges deflect a misplaced finger instead of stopping it on a flat top.
+- **Failure mode, not slip:** at every noise level the dominant failure is **DESCEND** (a finger lands on the item;
+  e.g. 80 of 122 failures at 20 mm), then CLOSE (closed on nothing / knocked the item over), then LIFT. Slip in
+  transit stays rare (≤ 8 per 200). These are real, replayed failures — five were traced individually (finger
+  pressing the box top at 210 N, bottle knocked over, depth error driving the hand onto the bottle).
+- **OOD cliff:** below 95% at ≈ ×1.08 of the training envelope, 80% at ≈ ×1.28, 50% at ≈ ×1.44; ~0 by ×2.
+  Mechanisms: items wider than the 80 mm stroke (DESCEND), items longer than the 245 mm bin (INSERT/RELEASE/VERIFY
+  — resting across the walls), and heavier items slipping (24 slips at ×1.5). The envelope was designed right up
+  to the gripper and bin limits, so there is almost no geometric headroom.
+- **Zero-noise failures are not zero.** 2 of the 1000 zero-noise episodes in the sweep failed, both short, wide
+  cylinders: one wedged in the *open* gripper (release declared complete, bottle carried back home, 12° tilt), one
+  leaning on a finger so RELEASE timed out. Both fail identically with the Phase 0 release logic, so they are not
+  caused by the seam. A windowed release check (as for grasp verification) is the obvious fix; per the Phase 0B rules
+  it has **not** been applied during measurement.
+- **Secondary stat:** a failed episode can still end in the right slot (e.g. a bag knocked out of the grasp by the bin
+  wall during INSERT that falls in). These are counted as failures (no controlled placement) and reported separately
+  as `failed_but_in_slot` (e.g. 2/24 at 8 mm, 17/123 at OOD ×1.5).
+- Per-slot success under noise is confounded by allocation (a failed episode frees its slot, so the next episode
+  reuses slot_0); do not read per-slot rates as a slot effect.
+
+### What this implies for the next phase (not done here)
+Position — especially depth — is the axis to buy down: either perception better than ~5 mm, or grasp behaviour that
+tolerates it (compliant/force-guarded descent that stops on contact instead of timing out, a wider or adaptive
+approach, or a re-observe step before closing). Yaw needs nothing below ~20°. The OOD edge says the envelope has no
+headroom: a real intake counter needs either a wider gripper or a policy for refusing items that do not fit.
