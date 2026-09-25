@@ -19,7 +19,35 @@ GRIPPER_OPEN = 255.0
 GRIPPER_CLOSED = 0.0
 
 ITEM_CLASSES = ["phone", "blade", "garment", "carton"]  # content classes of the sealed evidence bag
-SLOT_NAMES = [f"slot_{i}" for i in range(4)]
+
+# Rail and cabinet bank (Phase 1). The rail is a staging axis moved on its own, never inside the IK.
+RAIL_JOINT = "rail"
+RAIL_ACTUATOR = "rail_actuator"
+INTAKE_STATION = 0.0  # rail position (m) at which the robot works the intake counter
+CABINETS = {  # label -> (scene prefix, rail station in m; each locker stands directly in front of its station)
+    "CAB-A": ("a", -0.72),
+    "CAB-B": ("b", 0.45),
+    "CAB-C": ("c", 0.90),
+}
+SLOTS_PER_CABINET = 4
+LOCATIONS = [f"{cab}/slot_{i}" for cab in CABINETS for i in range(SLOTS_PER_CABINET)]  # twelve addresses
+
+
+def slot_site(location):
+    """Scene site name for a location address such as 'CAB-B/slot_2'."""
+    cab, slot = location.split("/")
+    return f"cab_{CABINETS[cab][0]}_{slot}"
+
+
+def cabinet_of(location):
+    return location.split("/")[0]
+
+
+def cabinet_camera(cabinet):
+    return f"cabinet_cam_{CABINETS[cabinet][0]}"
+
+
+SLOT_NAMES = LOCATIONS
 COUNTER_TOP_Z = 0.0
 
 # Flange-to-fingertip-pad offset in the hand frame (Franka's standard TCP offset).
@@ -79,11 +107,12 @@ def build_spec(path=SCENE_XML):
 def load(path=SCENE_XML):
     """Compile the scene and return (model, data) at the `home` keyframe."""
     model = build_spec(path).compile()
-    # The `home` keyframe comes from panda.xml and only covers the arm; MuJoCo zero-pads the rest,
-    # which would teleport every item to the world origin. Fill the item part from qpos0 instead.
+    # The `home` keyframe comes from the robot file and only covers the rail and arm; MuJoCo zero-pads the rest,
+    # which would teleport every item to the world origin. Fill each item's freejoint from qpos0 instead.
     key = key_id(model, "home")
-    arm_nq = len(ARM_JOINTS) + len(FINGER_JOINTS)
-    model.key_qpos[key, arm_nq:] = model.qpos0[arm_nq:]
+    for cls in ITEM_CLASSES:
+        a = model.jnt_qposadr[joint_id(model, item_joint(cls))]
+        model.key_qpos[key, a:a + 7] = model.qpos0[a:a + 7]
     data = mujoco.MjData(model)
     reset_home(model, data)
     return model, data
@@ -162,8 +191,11 @@ def body_geoms(model, bid):
 
 
 def slot_volume(model, data, slot):
-    """World-frame centre and half-extents of a slot's usable volume (box site, axis-aligned)."""
-    sid = site_id(model, slot)
+    """World-frame centre and half-extents of a slot's usable volume (box site, axis-aligned).
+
+    `slot` is a location address ('CAB-B/slot_2') or a raw site name.
+    """
+    sid = site_id(model, slot_site(slot) if "/" in slot else slot)
     return data.site_xpos[sid].copy(), model.site_size[sid].copy()
 
 

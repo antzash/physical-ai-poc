@@ -6,7 +6,7 @@
     room floor is z = -0.8. The `tcp` site is added to the hand body at load time (scripts/scene.py),
     because MJCF cannot reopen a body declared in an included file.
   -->
-  <include file="panda.xml"/>
+  <include file="panda_railed.xml"/>
 
   <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="10"/>
 
@@ -31,6 +31,9 @@
     <material name="cabinet_trim" rgba="0.36 0.37 0.38 1" specular="0.1" shininess="0.2"/>
     <material name="cabinet_handle" rgba="0.70 0.71 0.72 1" specular="0.5" shininess="0.6"/>
     <material name="slot_floor" rgba="0.30 0.31 0.32 1" specular="0.05"/>
+    <material name="rail_top" rgba="0.52 0.53 0.55 1" specular="0.1"/>
+    <material name="rail_steel" rgba="0.72 0.73 0.75 1" specular="0.7" shininess="0.8"/>
+    <material name="wall" rgba="0.62 0.64 0.62 1" specular="0.02"/>
     <!-- Sealed evidence bags: translucent polythene outer, visible contents, white barcode label. -->
     <material name="bag_poly" rgba="0.80 0.83 0.86 0.32" specular="0.6" shininess="0.8"/>
     <material name="label_blank" rgba="0.97 0.97 0.95 1" specular="0.05"/>
@@ -123,17 +126,37 @@
 
     <geom name="floor" type="plane" pos="0 0 -0.8" size="0 0 0.05" material="floor_mat"/>
 
-    <!-- Intake counter. The arm is mounted on it at the origin; items are presented in the intake zone. -->
-    <body name="counter" pos="0.25 -0.125 0">
-      <geom name="counter_body" class="static" pos="0 0 -0.41" size="0.5 0.325 0.39" material="counter_body"/>
-      <geom name="counter_top" class="static" pos="0 0 -0.01" size="0.5 0.325 0.01" material="counter_top"/>
-      <!-- Visual-only intake zone marking (no collision). -->
-      <geom name="intake_zone" type="box" pos="0.25 0.025 0.0004" size="0.16 0.19 0.0004"
-        contype="0" conaffinity="0" material="intake_mat" rgba="0.95 0.75 0.15 0.35"/>
+    <!-- Rail platform: the Panda's carriage rides along it (world y). Top at z = 0 like the counter. -->
+    <body name="rail_platform" pos="-0.055 0.075 0">
+      <geom name="platform_body" class="static" pos="0 0 -0.41" size="0.195 1.275 0.39" material="counter_body"/>
+      <geom name="platform_top" class="static" pos="0 0 -0.01" size="0.195 1.275 0.01" material="rail_top"/>
+      <geom name="rail_beam_l" class="visual_only" pos="0.055 0 -0.0005" size="0.012 1.26 0.0006" material="rail_steel"/>
+      <geom name="rail_beam_r" class="visual_only" pos="-0.085 0 -0.0005" size="0.012 1.26 0.0006" material="rail_steel"/>
     </body>
 
     <!--
-      Cabinet: a 2x2 grid of open-topped storage bins on a base unit, to the arm's left (+y).
+      Intake counter at rail station 0: the same top surface and position as the Phase 0 counter over the item area,
+      so the pick geometry is unchanged. Officers leave sealed, labelled bags here through the hatch.
+    -->
+    <body name="counter" pos="0.445 -0.125 0">
+      <geom name="counter_body" class="static" pos="0 0 -0.41" size="0.305 0.325 0.39" material="counter_body"/>
+      <geom name="counter_top" class="static" pos="0 0 -0.01" size="0.305 0.325 0.01" material="counter_top"/>
+      <!-- Visual-only intake zone marking (no collision), at the same world position as in Phase 0. -->
+      <geom name="intake_zone" type="box" pos="0.055 0.025 0.0004" size="0.16 0.19 0.0004"
+        contype="0" conaffinity="0" material="intake_mat" rgba="0.95 0.75 0.15 0.35"/>
+    </body>
+    <!-- The wall between the public side and the evidence room, with the intake hatch opening above the counter. -->
+    <body name="hatch_wall" pos="0.79 -0.125 0">
+      <geom name="hatch_left" class="visual_only" pos="0 -0.37 0.35" size="0.02 0.045 0.35" material="wall"/>
+      <geom name="hatch_right" class="visual_only" pos="0 0.37 0.35" size="0.02 0.045 0.35" material="wall"/>
+      <geom name="hatch_top" class="visual_only" pos="0 0 0.56" size="0.02 0.415 0.14" material="wall"/>
+      <geom name="hatch_sill" class="visual_only" pos="-0.005 0 0.005" size="0.025 0.325 0.005" material="cabinet_trim"/>
+      <geom name="hatch_frame_top" class="visual_only" pos="-0.024 0 0.417" size="0.006 0.33 0.006" material="cabinet_trim"/>
+    </body>
+
+    <!--
+      Three evidence lockers (CAB-A, CAB-B, CAB-C), each a 2x2 grid of open-topped bins, standing in front of the
+      rail at their own stations. Geometry is the Phase 0B locker, instanced with prefixed names.
       Built from thin static boxes: floor, back wall, front wall, two side walls, one divider along x
       (the "vertical divider") and one along y (the "shelf"). There is deliberately no top panel:
       a closed top with a horizontal shelf would make top-down insertion into the lower row impossible.
@@ -144,57 +167,167 @@
       reads as a steel locker. The front and bin back walls stay at 0.108 m: the 208 mm-wide Panda hand passes over
       them at release with ~12 mm to spare, so they cannot be raised without changing the task.
     -->
-    <body name="cabinet" pos="0.3 0.4 0">
-      <geom name="cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
-      <geom name="cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
-      <geom name="cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
+    <!-- CAB-A: narcotics -->
+    <body name="cab_a" pos="0.45 -0.72 0">
+      <geom name="a_cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
+      <geom name="a_cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
+      <geom name="a_cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
       <!-- Tall backboard, set back from the bins so the 0.21 m-wide Panda hand clears it over the rear slots. -->
-      <geom name="cab_backboard" class="cab_collision" pos="0 0.215 0.15" size="0.27 0.005 0.15"/>
-      <geom name="cab_front" class="cab_collision" pos="0 -0.165 0.05" size="0.27 0.005 0.05"/>
-      <geom name="cab_side_l" class="cab_collision" pos="-0.265 0 0.05" size="0.005 0.16 0.05"/>
-      <geom name="cab_side_r" class="cab_collision" pos="0.265 0 0.05" size="0.005 0.16 0.05"/>
-      <geom name="cab_divider" class="static" pos="0 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
-      <geom name="cab_shelf" class="static" pos="0 0 0.05" size="0.26 0.005 0.05" material="cabinet_panel"/>
+      <geom name="a_cab_backboard" class="cab_collision" pos="0 0.215 0.15" size="0.27 0.005 0.15"/>
+      <geom name="a_cab_front" class="cab_collision" pos="0 -0.165 0.05" size="0.27 0.005 0.05"/>
+      <geom name="a_cab_side_l" class="cab_collision" pos="-0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="a_cab_side_r" class="cab_collision" pos="0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="a_cab_divider" class="static" pos="0 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
+      <geom name="a_cab_shelf" class="static" pos="0 0 0.05" size="0.26 0.005 0.05" material="cabinet_panel"/>
 
       <!-- Visual locker shell. Inner faces sit on the collision walls' inner faces, so bin interiors look unchanged. -->
-      <geom name="vis_carcass" class="visual_only" pos="0 0.025 -0.4" size="0.292 0.217 0.4" material="cabinet_body"/>
-      <geom name="vis_front" class="visual_only" pos="0 -0.1765 0.054" size="0.292 0.0165 0.054"
+      <geom name="a_vis_carcass" class="visual_only" pos="0 0.025 -0.4" size="0.292 0.217 0.4" material="cabinet_body"/>
+      <geom name="a_vis_front" class="visual_only" pos="0 -0.1765 0.054" size="0.292 0.0165 0.054"
         material="cabinet_panel"/>
-      <geom name="vis_front_cap" class="visual_only" pos="0 -0.1765 0.1095" size="0.292 0.0175 0.0015"
+      <geom name="a_vis_front_cap" class="visual_only" pos="0 -0.1765 0.1095" size="0.292 0.0175 0.0015"
         material="cabinet_trim"/>
-      <geom name="vis_side_l" class="visual_only" pos="-0.276 0.025 0.08" size="0.0161 0.217 0.08"
+      <geom name="a_vis_side_l" class="visual_only" pos="-0.276 0.025 0.08" size="0.0161 0.217 0.08"
         material="cabinet_panel"/>
-      <geom name="vis_side_r" class="visual_only" pos="0.276 0.025 0.08" size="0.0161 0.217 0.08"
+      <geom name="a_vis_side_r" class="visual_only" pos="0.276 0.025 0.08" size="0.0161 0.217 0.08"
         material="cabinet_panel"/>
-      <geom name="vis_backboard" class="visual_only" pos="0 0.226 0.15" size="0.292 0.016 0.15"
+      <geom name="a_vis_backboard" class="visual_only" pos="0 0.226 0.15" size="0.292 0.016 0.15"
         material="cabinet_panel"/>
-      <geom name="vis_backboard_cap" class="visual_only" pos="0 0.226 0.3015" size="0.294 0.018 0.0015"
+      <geom name="a_vis_backboard_cap" class="visual_only" pos="0 0.226 0.3015" size="0.294 0.018 0.0015"
         material="cabinet_trim"/>
       <!-- Locker doors on the two faces the demo camera sees (+x side, -y front), with pull handles. -->
-      <geom name="vis_door_x1" class="visual_only" pos="0.2925 -0.075 -0.21" size="0.002 0.095 0.17"
+      <geom name="a_vis_door_x1" class="visual_only" pos="0.2925 -0.075 -0.21" size="0.002 0.095 0.17"
         material="cabinet_trim"/>
-      <geom name="vis_door_x2" class="visual_only" pos="0.2925 0.125 -0.21" size="0.002 0.095 0.17"
+      <geom name="a_vis_door_x2" class="visual_only" pos="0.2925 0.125 -0.21" size="0.002 0.095 0.17"
         material="cabinet_trim"/>
-      <geom name="vis_handle_x1" class="visual_only" pos="0.297 0.005 -0.12" size="0.004 0.004 0.04"
+      <geom name="a_vis_handle_x1" class="visual_only" pos="0.297 0.005 -0.12" size="0.004 0.004 0.04"
         material="cabinet_handle"/>
-      <geom name="vis_handle_x2" class="visual_only" pos="0.297 0.045 -0.12" size="0.004 0.004 0.04"
+      <geom name="a_vis_handle_x2" class="visual_only" pos="0.297 0.045 -0.12" size="0.004 0.004 0.04"
         material="cabinet_handle"/>
-      <geom name="vis_door_y" class="visual_only" pos="0 -0.1935 -0.21" size="0.27 0.002 0.17"
+      <geom name="a_vis_door_y" class="visual_only" pos="0 -0.1935 -0.21" size="0.27 0.002 0.17"
         material="cabinet_trim"/>
-      <geom name="vis_handle_y" class="visual_only" pos="0 -0.198 -0.07" size="0.06 0.004 0.004"
+      <geom name="a_vis_handle_y" class="visual_only" pos="0 -0.198 -0.07" size="0.06 0.004 0.004"
         material="cabinet_handle"/>
-      <geom name="vis_plinth" class="visual_only" pos="0 0.025 -0.78" size="0.296 0.221 0.02"
+      <geom name="a_vis_plinth" class="visual_only" pos="0 0.025 -0.78" size="0.296 0.221 0.02"
         material="cabinet_trim"/>
 
       <!--
         Slot sites. Each is a box site whose pos is the centre of the bin's usable volume and whose
         size is the half-extent of that volume, so placement checks read the slot volume from the model.
       -->
-      <site name="slot_0" class="slot" pos="-0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
-      <site name="slot_1" class="slot" pos="0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
-      <site name="slot_2" class="slot" pos="-0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
-      <site name="slot_3" class="slot" pos="0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_a_slot_0" class="slot" pos="-0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_a_slot_1" class="slot" pos="0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_a_slot_2" class="slot" pos="-0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_a_slot_3" class="slot" pos="0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
     </body>
+
+
+    <!-- CAB-B: weapons -->
+    <body name="cab_b" pos="0.45 0.45 0">
+      <geom name="b_cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
+      <geom name="b_cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
+      <geom name="b_cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
+      <!-- Tall backboard, set back from the bins so the 0.21 m-wide Panda hand clears it over the rear slots. -->
+      <geom name="b_cab_backboard" class="cab_collision" pos="0 0.215 0.15" size="0.27 0.005 0.15"/>
+      <geom name="b_cab_front" class="cab_collision" pos="0 -0.165 0.05" size="0.27 0.005 0.05"/>
+      <geom name="b_cab_side_l" class="cab_collision" pos="-0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="b_cab_side_r" class="cab_collision" pos="0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="b_cab_divider" class="static" pos="0 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
+      <geom name="b_cab_shelf" class="static" pos="0 0 0.05" size="0.26 0.005 0.05" material="cabinet_panel"/>
+
+      <!-- Visual locker shell. Inner faces sit on the collision walls' inner faces, so bin interiors look unchanged. -->
+      <geom name="b_vis_carcass" class="visual_only" pos="0 0.025 -0.4" size="0.292 0.217 0.4" material="cabinet_body"/>
+      <geom name="b_vis_front" class="visual_only" pos="0 -0.1765 0.054" size="0.292 0.0165 0.054"
+        material="cabinet_panel"/>
+      <geom name="b_vis_front_cap" class="visual_only" pos="0 -0.1765 0.1095" size="0.292 0.0175 0.0015"
+        material="cabinet_trim"/>
+      <geom name="b_vis_side_l" class="visual_only" pos="-0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="b_vis_side_r" class="visual_only" pos="0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="b_vis_backboard" class="visual_only" pos="0 0.226 0.15" size="0.292 0.016 0.15"
+        material="cabinet_panel"/>
+      <geom name="b_vis_backboard_cap" class="visual_only" pos="0 0.226 0.3015" size="0.294 0.018 0.0015"
+        material="cabinet_trim"/>
+      <!-- Locker doors on the two faces the demo camera sees (+x side, -y front), with pull handles. -->
+      <geom name="b_vis_door_x1" class="visual_only" pos="0.2925 -0.075 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="b_vis_door_x2" class="visual_only" pos="0.2925 0.125 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="b_vis_handle_x1" class="visual_only" pos="0.297 0.005 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="b_vis_handle_x2" class="visual_only" pos="0.297 0.045 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="b_vis_door_y" class="visual_only" pos="0 -0.1935 -0.21" size="0.27 0.002 0.17"
+        material="cabinet_trim"/>
+      <geom name="b_vis_handle_y" class="visual_only" pos="0 -0.198 -0.07" size="0.06 0.004 0.004"
+        material="cabinet_handle"/>
+      <geom name="b_vis_plinth" class="visual_only" pos="0 0.025 -0.78" size="0.296 0.221 0.02"
+        material="cabinet_trim"/>
+
+      <!--
+        Slot sites. Each is a box site whose pos is the centre of the bin's usable volume and whose
+        size is the half-extent of that volume, so placement checks read the slot volume from the model.
+      -->
+      <site name="cab_b_slot_0" class="slot" pos="-0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_b_slot_1" class="slot" pos="0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_b_slot_2" class="slot" pos="-0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_b_slot_3" class="slot" pos="0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+    </body>
+
+
+    <!-- CAB-C: general -->
+    <body name="cab_c" pos="0.45 0.9 0">
+      <geom name="c_cab_base" class="static" pos="0 0.025 -0.4" size="0.27 0.195 0.4" material="cabinet_body"/>
+      <geom name="c_cab_floor" class="static" pos="0 0 0.004" size="0.26 0.16 0.004" material="slot_floor"/>
+      <geom name="c_cab_back" class="static" pos="0 0.165 0.05" size="0.27 0.005 0.05" material="cabinet_panel"/>
+      <!-- Tall backboard, set back from the bins so the 0.21 m-wide Panda hand clears it over the rear slots. -->
+      <geom name="c_cab_backboard" class="cab_collision" pos="0 0.215 0.15" size="0.27 0.005 0.15"/>
+      <geom name="c_cab_front" class="cab_collision" pos="0 -0.165 0.05" size="0.27 0.005 0.05"/>
+      <geom name="c_cab_side_l" class="cab_collision" pos="-0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="c_cab_side_r" class="cab_collision" pos="0.265 0 0.05" size="0.005 0.16 0.05"/>
+      <geom name="c_cab_divider" class="static" pos="0 0 0.05" size="0.005 0.16 0.05" material="cabinet_panel"/>
+      <geom name="c_cab_shelf" class="static" pos="0 0 0.05" size="0.26 0.005 0.05" material="cabinet_panel"/>
+
+      <!-- Visual locker shell. Inner faces sit on the collision walls' inner faces, so bin interiors look unchanged. -->
+      <geom name="c_vis_carcass" class="visual_only" pos="0 0.025 -0.4" size="0.292 0.217 0.4" material="cabinet_body"/>
+      <geom name="c_vis_front" class="visual_only" pos="0 -0.1765 0.054" size="0.292 0.0165 0.054"
+        material="cabinet_panel"/>
+      <geom name="c_vis_front_cap" class="visual_only" pos="0 -0.1765 0.1095" size="0.292 0.0175 0.0015"
+        material="cabinet_trim"/>
+      <geom name="c_vis_side_l" class="visual_only" pos="-0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="c_vis_side_r" class="visual_only" pos="0.276 0.025 0.08" size="0.0161 0.217 0.08"
+        material="cabinet_panel"/>
+      <geom name="c_vis_backboard" class="visual_only" pos="0 0.226 0.15" size="0.292 0.016 0.15"
+        material="cabinet_panel"/>
+      <geom name="c_vis_backboard_cap" class="visual_only" pos="0 0.226 0.3015" size="0.294 0.018 0.0015"
+        material="cabinet_trim"/>
+      <!-- Locker doors on the two faces the demo camera sees (+x side, -y front), with pull handles. -->
+      <geom name="c_vis_door_x1" class="visual_only" pos="0.2925 -0.075 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="c_vis_door_x2" class="visual_only" pos="0.2925 0.125 -0.21" size="0.002 0.095 0.17"
+        material="cabinet_trim"/>
+      <geom name="c_vis_handle_x1" class="visual_only" pos="0.297 0.005 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="c_vis_handle_x2" class="visual_only" pos="0.297 0.045 -0.12" size="0.004 0.004 0.04"
+        material="cabinet_handle"/>
+      <geom name="c_vis_door_y" class="visual_only" pos="0 -0.1935 -0.21" size="0.27 0.002 0.17"
+        material="cabinet_trim"/>
+      <geom name="c_vis_handle_y" class="visual_only" pos="0 -0.198 -0.07" size="0.06 0.004 0.004"
+        material="cabinet_handle"/>
+      <geom name="c_vis_plinth" class="visual_only" pos="0 0.025 -0.78" size="0.296 0.221 0.02"
+        material="cabinet_trim"/>
+
+      <!--
+        Slot sites. Each is a box site whose pos is the centre of the bin's usable volume and whose
+        size is the half-extent of that volume, so placement checks read the slot volume from the model.
+      -->
+      <site name="cab_c_slot_0" class="slot" pos="-0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_c_slot_1" class="slot" pos="0.1325 -0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_c_slot_2" class="slot" pos="-0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+      <site name="cab_c_slot_3" class="slot" pos="0.1325 0.0825 0.058" size="0.1225 0.0725 0.05"/>
+    </body>
+
 
     <!--
       Evidence units: SEALED EVIDENCE BAGS. The officer seals and labels; the robot only moves the sealed unit.
@@ -240,7 +373,9 @@
 
     <camera name="demo_cam" pos="1.75 -1.25 1.2" mode="targetbody" target="demo_target" fovy="42"/>
     <camera name="topdown_cam" pos="0.5 -0.12 1.9" xyaxes="0 -1 0 1 0 0" fovy="22"/>
-    <camera name="cabinet_cam" pos="0.3 0.22 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
+    <camera name="cabinet_cam_a" pos="0.45 -0.90 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
+    <camera name="cabinet_cam_b" pos="0.45 0.27 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
+    <camera name="cabinet_cam_c" pos="0.45 0.72 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
     <!--
       Intake scanner: fixed, looking straight down at the intake zone, rendered at 4000x3260 (scripts/scanner.py).
       Covers every label position the pose randomisation allows (~0.44 m x 0.54 m) at 0.135 mm/px = 2.06 px per
@@ -248,4 +383,10 @@
     -->
     <camera name="scanner_cam" pos="0.50 -0.10 0.70" xyaxes="0 -1 0 1 0 0" fovy="34.9"/>
   </worldbody>
+
+  <contact>
+    <!-- The carriage rides the rail on linear bearings; the robot base casting must not drag on the platform. -->
+    <exclude body1="rail_platform" body2="link0"/>
+    <exclude body1="rail_platform" body2="rail_carriage"/>
+  </contact>
 </mujoco>

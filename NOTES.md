@@ -562,3 +562,37 @@ simulator's true item ID; refuse and leave the item for a human. Misfile rate is
   simulation ceiling, not a field read rate. Read rate under pose error and an image-degradation check follow in
   Task E.
 - The verify-scan-before-release behaviour (B3) and every refusal path live in the state machine (Task D).
+
+## Task C — The rail and the cabinet bank
+
+- **`models/panda/panda_railed.xml`**: a copy of `panda.xml` with `link0` nested in a `rail_carriage` body (25 kg)
+  on a slide joint along world y (range ±0.95 m, damping 400), driven by `rail_actuator` (position, kp 20000,
+  force ±600 N). `panda.xml` is untouched and the stock Menagerie scene still compiles.
+- **Layout** (`evidence_intake.xml`): a rail platform along y carries the robot. The intake counter sits at rail
+  station 0, with the same top surface and item area as Phase 0, so picks are unchanged. A visual-only wall with
+  the intake hatch stands behind it. Three Phase 0B lockers stand directly in front of their stations: `CAB-A`
+  (−0.72 m, narcotics), `CAB-B` (+0.45 m, weapons), `CAB-C` (+0.90 m, general). Twelve slot sites
+  (`cab_b_slot_2` ↔ address `CAB-B/slot_2`), plus one inset camera per locker.
+- **Reach:** at each cabinet's station, IK converges (≤ 0.5 mm) above and at release height for all 12 slots, with
+  no arm–locker contacts. The front and side bin walls stay at 0.108 m (the hand-clearance constraint from Phase
+  0B applies to all three).
+- **Rail dynamics, a bug found by testing:** the first traverse did not move (peak speed 0). Contact listing showed
+  `link0`'s collision mesh resting on the platform top and its friction pinning the carriage. A real carriage rides
+  on linear bearings, so the platform–`link0`/carriage contact is excluded. Afterwards: peak 0.40 m/s (the capped
+  setpoint ramp), zero final error, settled within 0.35 s of the ramp, arm deviation relative to the carriage
+  ≤ 1.2 mm.
+- **TRAVERSE phase** (rail not in the IK): after a verified LIFT the arm lifts the bag to a carry pose (TCP 0.45 m,
+  clearing the 0.30 m backboards), then the rail ramps to the station with the arm's joint targets frozen, and
+  completes on a real condition (within 1 mm and < 2 mm/s) with a timeout. Holds are checked for drops throughout.
+  On return: retreat, arm home, then the rail back to the intake station, strictly in sequence.
+- **Routing** (`scripts/routing.py`): case record → category → cabinet (narcotics → CAB-A, weapons → CAB-B,
+  general → CAB-C), then the first free slot via `choose_slot()`. Fails closed: `no_case_match` and `cabinet_full`
+  are refusals, never a fallback. `tests/test_routing.py` (6 tests) covers the 12 addresses, category routing, the
+  unregistered ID, garbage strings, full-cabinet refusal and double-allocation. The case DB covers 24 pool IDs
+  (6 per content class, from which the category follows) plus the damaged label's ID; `EV-2026-009999` is
+  deliberately unregistered.
+- **Check:** 12 episodes, one into each of the 12 locations, all via rail traverse: **12/12**, cycles 16–21 s,
+  chain intact. `out/p1c_traverse_sheet.png` shows a frame per phase for a CAB-C episode.
+- **Transitional state:** until Task D, the episode still allocates locations with the Phase 0 first-free counter
+  (`slots.py`) over the 12 addresses; routing from the decoded barcode replaces it in Task D. The old allocator test
+  moved out of `test_custody_log.py`; `test_perception.py` uses location addresses.

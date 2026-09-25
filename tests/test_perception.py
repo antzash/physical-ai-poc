@@ -71,7 +71,7 @@ def test_error_is_drawn_exactly_once_per_episode():
     try:
         with tempfile.TemporaryDirectory() as tmp:
             st = episode.IntakeStation(Path(tmp) / "log.jsonl", echo=False)
-            st.run_episode(1000, slot="slot_0", noise=NoiseSpec(0.005, np.radians(5)))
+            st.run_episode(1000, slot="CAB-B/slot_0", noise=NoiseSpec(0.005, np.radians(5)))
     finally:
         episode.draw_error = real
     assert len(calls) == 1
@@ -82,7 +82,7 @@ def test_noise_reaches_the_controller_target():
     m, d, cls, b, g = _placed_scene(seed=1007)
     true_xy = d.xpos[b][:2].copy()
     err = PerceptionError(pos_offset=(0.02, 0.0, 0.0))
-    c = controller.PickPlaceController(m, d, cls, "slot_0", perception_error=err)
+    c = controller.PickPlaceController(m, d, cls, "CAB-B/slot_0", perception_error=err)
     while c.phase != "APPROACH":
         c.update()
         mujoco.mj_step(m, d)
@@ -94,20 +94,20 @@ def test_evaluator_judges_on_ground_truth():
     placement error of a successful run must equal the true distance to the slot centre."""
     with tempfile.TemporaryDirectory() as tmp:
         st = episode.IntakeStation(Path(tmp) / "log.jsonl", echo=False)
-        baseline = st.run_episode(1007, slot="slot_0", noise=NoiseSpec())
+        baseline = st.run_episode(1007, slot="CAB-B/slot_0", noise=NoiseSpec())
         assert baseline.success  # sanity: this seed succeeds with perfect state
         episode_draw = episode.draw_error
         episode.draw_error = lambda spec, rng: PerceptionError(pos_offset=(0.06, 0.0, 0.0))
         try:
-            miss = st.run_episode(1007, slot="slot_0", noise=NoiseSpec(0.06))
+            miss = st.run_episode(1007, slot="CAB-B/slot_0", noise=NoiseSpec(0.06))
         finally:
             episode.draw_error = episode_draw
         assert not miss.success and miss.failure_phase in ("CLOSE", "LIFT", "DESCEND")
         actions = [e["action"] for e in st.log.tail(3)]
         assert "PLACED" not in actions and "VERIFIED" not in actions and actions[-1] == "FAILED"
 
-        ok = st.run_episode(1007, slot="slot_1", noise=NoiseSpec(0.002))
-        center, _ = scene.slot_volume(st.m, st.d, "slot_1")
+        ok = st.run_episode(1007, slot="CAB-B/slot_1", noise=NoiseSpec(0.002))
+        center, _ = scene.slot_volume(st.m, st.d, "CAB-B/slot_1")
         true_err = float(np.linalg.norm(st.d.xpos[scene.body_id(st.m, scene.item_body(ok.object_class))][:2] - center[:2]))
         assert ok.success and abs(ok.placement_error - round(true_err, 4)) < 1e-9
 

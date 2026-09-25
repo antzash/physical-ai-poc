@@ -16,7 +16,8 @@ import ik
 import scene
 from perception import ZERO_ERROR, observe
 
-PHASES = ["HOME", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRANSIT", "INSERT", "RELEASE", "RETREAT", "RETURN"]
+PHASES = ["HOME", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRAVERSE", "TRANSIT", "INSERT", "RELEASE", "RETREAT",
+          "RETURN"]
 
 # Gripper geometry measured from the Menagerie meshes, in the TCP frame (see NOTES.md, M2).
 FINGERTIP_BELOW_TCP = 0.0089
@@ -26,6 +27,13 @@ TIP_CLEARANCE = 0.004  # fingertips stay this far above the counter at the grasp
 HAND_CLEARANCE = 0.006  # hand body stays this far above a tall item's top at the grasp pose
 PREGRASP_CLEARANCE = 0.10  # TCP height above the item's top for APPROACH
 SAFE_Z = 0.30  # transit height for the TCP: clears the bin walls with any item hanging below
+# TRAVERSE: the arm first lifts the bag to a carry pose over the carriage (clears every locker, backboards are 0.30 m),
+# then the rail moves with the arm's joint targets frozen. Rail and arm never move at the same time.
+CARRY_X = 0.42  # m in front of the carriage
+CARRY_Z = 0.45
+RAIL_VMAX = 0.40  # m/s; MuJoCo position actuators have no velocity limit, so the setpoint ramp enforces it
+RAIL_TOL = 0.001
+RAIL_SETTLE_VEL = 0.002
 BIN_WALL_TOP_Z = 0.108
 WALL_CLEARANCE = 0.012
 RELEASE_DROP = 0.010  # item bottom this far above the bin floor at release
@@ -135,7 +143,11 @@ class PickPlaceController:
         self.item_cls = item_cls
         # The controller's ONLY view of the item: ground truth plus this episode's fixed perception error.
         self.perception_error = perception_error
-        self.slot = slot
+        self.slot = slot  # a location address such as "CAB-B/slot_2"
+        self.rail_act = scene.actuator_id(model, scene.RAIL_ACTUATOR)
+        self.rail_qadr = model.jnt_qposadr[scene.joint_id(model, scene.RAIL_JOINT)]
+        self.rail_dadr = model.jnt_dofadr[scene.joint_id(model, scene.RAIL_JOINT)]
+        self.station = scene.CABINETS[scene.cabinet_of(slot)][1]
         self.on_event = on_event
         self.ik = ik_solver or ik.IK(model)
         self.tcp = scene.site_id(model, "tcp")
@@ -245,30 +257,45 @@ class PickPlaceController:
             return False
         return True
 
+    # ---- rail (staging axis, never in the IK) ----------------------------------------------------------------------
+
+    def _rail_q(self):
+        return float(self.d.qpos[self.rail_qadr])
+
+    def _start_rail(self, target):
+        """Begin a speed-capped move of the rail setpoint. Returns the ramp duration."""
+        self.rail_from, self.rail_to = self._rail_q(), float(target)
+        # smoothstep peaks at 1.5x the mean speed, so this duration caps the setpoint speed at RAIL_VMAX
+        self.rail_dur = max(0.3, 1.5 * abs(self.rail_to - self.rail_from) / RAIL_VMAX)
+        self.rail_t0 = self.d.time
+        return self.rail_dur
+
+    def _step_rail(self):
+        """Advance the rail setpoint; True once the carriage is at the target and settled (a real condition)."""
+        u = _smoothstep((self.d.time - self.rail_t0) / self.rail_dur)
+        self.d.ctrl[self.rail_act] = self.rail_from + u * (self.rail_to - self.rail_from)
+        return (u >= 1.0 and abs(self._rail_q() - self.rail_to) < RAIL_TOL
+                and abs(self.d.qvel[self.rail_dadr]) < RAIL_SETTLE_VEL)
+
     # ---- phases --------------------------------------------------------------------------------------------------
 
     def _enter_home(self):
         self.d.ctrl[self.grip_act] = scene.GRIPPER_OPEN
         self.joint_start = self.d.qpos[self.arm_qadr].copy()
         self.joint_dur = max(0.3, np.max(np.abs(self.home_q - self.joint_start)) / 1.0)
+        self.joint_t0 = self.d.time
         self.timeout = self.joint_dur + 2.0
 
-    def _update_joint_home(self, next_phase):
-        u = _smoothstep((self.d.time - self.phase_start) / self.joint_dur)
+    def _step_joint_home(self):
+        u = _smoothstep((self.d.time - self.joint_t0) / self.joint_dur)
         self.q_cmd = self.joint_start + u * (self.home_q - self.joint_start)
         self.d.ctrl[self.arm_act] = self.q_cmd
-        err = np.max(np.abs(self.d.qpos[self.arm_qadr] - self.home_q))
-        if u >= 1.0 and err < 0.02:
-            if next_phase is None:
-                self._emit("done")
-                self.result = CycleResult(True, None, "cycle complete", self.grasped, self.slipped,
-                                          self.d.time - self.start_time, self.events)
-            else:
-                self._cmd_pose = self._tcp_pose()
-                self._enter(next_phase)
+        return u >= 1.0 and np.max(np.abs(self.d.qpos[self.arm_qadr] - self.home_q)) < 0.02
 
     def _update_home(self):
-        self._update_joint_home("APPROACH")
+        if self._step_joint_home():
+            self._cmd_pose = self._tcp_pose()
+            self._enter("APPROACH")
 
     def _enter_approach(self):
         obs = self._observe()
@@ -341,11 +368,35 @@ class PickPlaceController:
         if grasp_verified(self.verify_samples):
             self.grasped = True
             self._emit("grasp_verified")
-            self._enter("TRANSIT")
+            self._enter("TRAVERSE")
         else:
             s = np.asarray(self.verify_samples, dtype=bool)
             self._fail(f"grasp not verified after lift (contact L {s[:, 0].mean():.0%}, R {s[:, 1].mean():.0%}, "
                        f"above height {s[:, 2].mean():.0%} of samples)")
+
+    def _enter_traverse(self):
+        pos, yaw = self._cmd_pose
+        self.traverse_stage = "raise"
+        dur = self._plan([((pos[0], pos[1], CARRY_Z), yaw), ((CARRY_X, self._rail_q(), CARRY_Z), yaw)], CART_SPEED)
+        rail_dur = 1.5 * abs(self.station - self._rail_q()) / RAIL_VMAX
+        self.timeout = dur + rail_dur + 4.0
+
+    def _update_traverse(self):
+        if not self._check_hold():
+            return
+        if self.traverse_stage == "raise":
+            self._track()
+            if self._at_goal():
+                self.traverse_stage = "rail"
+                self._start_rail(self.station)
+            return
+        self.d.ctrl[self.arm_act] = self.q_cmd  # arm held: joint targets frozen while the carriage moves
+        if self._step_rail():
+            shift = self.rail_to - self.rail_from
+            pos, yaw = self._cmd_pose
+            self._cmd_pose = (pos + np.array([0.0, shift, 0.0]), yaw)
+            self._emit("traversed", f"rail at {self._rail_q():+.3f} m ({scene.cabinet_of(self.slot)} station)")
+            self._enter("TRANSIT")
 
     def _enter_transit(self):
         center, _ = scene.slot_volume(self.m, self.d, self.slot)
@@ -411,9 +462,20 @@ class PickPlaceController:
 
     def _enter_return(self):
         self._enter_home()
+        self.return_stage = "arm"
+        self.timeout += 1.5 * abs(scene.INTAKE_STATION - self._rail_q()) / RAIL_VMAX + 2.0
 
     def _update_return(self):
-        self._update_joint_home(None)
+        if self.return_stage == "arm":
+            if self._step_joint_home():
+                self.return_stage = "rail"
+                self._start_rail(scene.INTAKE_STATION)
+            return
+        self.d.ctrl[self.arm_act] = self.q_cmd  # arm held at home while the carriage returns to the intake station
+        if self._step_rail():
+            self._emit("done")
+            self.result = CycleResult(True, None, "cycle complete", self.grasped, self.slipped,
+                                      self.d.time - self.start_time, self.events)
 
     # ---- public API ----------------------------------------------------------------------------------------------
 
@@ -447,7 +509,7 @@ def run_cycle(model, data, item_cls, slot, max_time=30.0, frame_cb=None):
 
 
 if __name__ == "__main__":
-    # M2 check: item_box at its fixed scene pose -> slot_0, rendering one frame per phase to out/m2_*.png.
+    # One cycle with the scene's nominal item pose -> CAB-B/slot_0 (traverses the rail), one frame per phase.
     m, d = scene.load()
     renderer = mujoco.Renderer(m, 720, 1280)
     seen = {}
@@ -459,15 +521,15 @@ if __name__ == "__main__":
         # Grab each phase shortly before it ends by overwriting until the phase changes.
         seen[key] = scene.render(m, d, renderer=renderer) if d.time - ctrl.phase_start > 0.05 or key not in seen else seen[key]
 
-    result = run_cycle(m, d, "box", "slot_0", frame_cb=snap)
+    result = run_cycle(m, d, "carton", "CAB-B/slot_0", max_time=60.0, frame_cb=snap)
     mujoco.mj_step(m, d, nstep=500)
     seen["SETTLED"] = scene.render(m, d, renderer=renderer)
     for i, (k, img) in enumerate(seen.items()):
         scene.save_png(img, scene.OUT_DIR / f"m2_{i:02d}_{k.lower()}.png")
     for ev in result.events:
         print(f"{ev.time:7.3f}s  {ev.phase:9s} {ev.kind:15s} {ev.detail}")
-    center, half = scene.slot_volume(m, d, "slot_0")
-    box = d.xpos[scene.body_id(m, "item_box")]
-    inside = bool(np.all(np.abs(box - center) <= half))
+    center, half = scene.slot_volume(m, d, "CAB-B/slot_0")
+    item = d.xpos[scene.body_id(m, "item_carton")]
+    inside = bool(np.all(np.abs(item - center) <= half))
     print(f"success={result.success} phase={result.failure_phase} reason={result.reason} "
-          f"duration={result.duration:.2f}s box={box.round(4)} inside_slot_0={inside}")
+          f"duration={result.duration:.2f}s item={item.round(4)} inside CAB-B/slot_0={inside}")

@@ -1,4 +1,4 @@
-"""Tamper-evidence tests for the custody log and the slot allocator.
+"""Tamper-evidence tests for the custody log (slot allocation is tested in test_routing.py).
 
 Run with `python3 tests/test_custody_log.py` (or `pytest tests/`).
 """
@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from logger import ROBOT_ACTOR, SYSTEM_ACTOR, CustodyLog, compute_hash, officer, verify_file  # noqa: E402
-from slots import CabinetFull, SlotAllocator  # noqa: E402
 
 
 def _write_log(path, n_items=2):
@@ -111,20 +110,6 @@ def test_reopen_continues_chain():
         ev = second.append(SYSTEM_ACTOR, "VERIFIED", "EV-TEST-0000", "CASE-TEST-01", "box", "slot_0")
         assert ev["prev_hash"] == first.tail(1)[0]["hash"]
         assert second.verify() is None
-
-
-def test_slot_allocator_fills_then_raises():
-    alloc = SlotAllocator()
-    got = [alloc.allocate(f"EV-{i}") for i in range(4)]
-    assert got == ["slot_0", "slot_1", "slot_2", "slot_3"]
-    try:
-        alloc.allocate("EV-5")
-    except CabinetFull:
-        pass
-    else:
-        raise AssertionError("fifth allocation should raise CabinetFull")
-    alloc.release("slot_2")
-    assert alloc.allocate("EV-6") == "slot_2"
 
 
 if __name__ == "__main__":
