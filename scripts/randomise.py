@@ -123,17 +123,21 @@ class Randomiser:
         data.qpos[q:q + 7] = [xy[0], xy[1], z, np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
         data.qvel[dv:dv + 6] = 0
 
-    def apply(self, data, seed, object_class=None):
-        """Randomise the model and place the items. Call after resetting data to the home keyframe."""
+    def apply(self, data, seed, object_class=None, size_mult=1.0, mass_mult=1.0):
+        """Randomise the model and place the items. Call after resetting data to the home keyframe.
+
+        size_mult / mass_mult scale the drawn size and mass at runtime for out-of-distribution sweeps. They are
+        applied after the draws, so the RNG sequence and the ranges above are unchanged and 1.0 is bit-identical.
+        """
         rng = np.random.default_rng(seed)
         cls = object_class or scene.ITEM_CLASSES[rng.integers(len(scene.ITEM_CLASSES))]
         scales = np.array([rng.uniform(lo, hi) for lo, hi in SIZE_SCALE[cls]])
         nominal = self.nom_size[cls][: len(scales)]
-        size = nominal * scales
+        size = nominal * scales * size_mult
         if cls == "bag":
             # A sealed bag lies flat; an ellipsoid taller than it is wide would stand on edge and roll over.
             size[2] = min(size[2], 0.85 * size[1])
-        mass = float(rng.uniform(*MASS_RANGE[cls]))
+        mass = float(rng.uniform(*MASS_RANGE[cls])) * mass_mult
         friction = float(rng.uniform(*FRICTION_RANGE))
         xy = [float(rng.uniform(*POSE_X)), float(rng.uniform(*POSE_Y))]
         yaw = float(rng.uniform(-np.pi, np.pi))

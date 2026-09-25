@@ -3,3 +3,4 @@ numpy
 imageio
 imageio-ffmpeg
 pillow
+matplotlib

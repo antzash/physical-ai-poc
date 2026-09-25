@@ -14,6 +14,7 @@ import numpy as np
 
 import ik
 import scene
+from perception import ZERO_ERROR, observe
 
 PHASES = ["HOME", "APPROACH", "DESCEND", "CLOSE", "LIFT", "TRANSIT", "INSERT", "RELEASE", "RETREAT", "RETURN"]
 
@@ -129,9 +130,11 @@ def grasp_verified(samples):
 
 
 class PickPlaceController:
-    def __init__(self, model, data, item_cls, slot, on_event=None, ik_solver=None):
+    def __init__(self, model, data, item_cls, slot, on_event=None, ik_solver=None, perception_error=ZERO_ERROR):
         self.m, self.d = model, data
         self.item_cls = item_cls
+        # The controller's ONLY view of the item: ground truth plus this episode's fixed perception error.
+        self.perception_error = perception_error
         self.slot = slot
         self.on_event = on_event
         self.ik = ik_solver or ik.IK(model)
@@ -156,7 +159,7 @@ class PickPlaceController:
         self.grasped = False
         self.slipped = False
         self.no_contact_steps = 0
-        self.rest_z = data.xpos[self.item_body][2]
+        self.rest_z = data.xpos[self.item_body][2]  # ground truth: used only by the grasp verifier (evaluation)
         self.result: CycleResult | None = None
         self.start_time = data.time
         self._enter("HOME")
@@ -215,9 +218,9 @@ class PickPlaceController:
     def _finger_q(self):
         return self.d.qpos[self.finger_qadr]
 
-    def _item_yaw(self):
-        R = self.d.xmat[self.item_body].reshape(3, 3)
-        return float(np.arctan2(R[1, 0], R[0, 0]))
+    def _observe(self):
+        return observe(self.m, self.d, self.item_body, self.item_geom, self.perception_error,
+                       "cylinder" if self.item_cls == "cylinder" else "other")
 
     def _enter(self, phase):
         self.phase = phase
@@ -269,12 +272,13 @@ class PickPlaceController:
         self._update_joint_home("APPROACH")
 
     def _enter_approach(self):
-        top = geom_highest_z(self.m, self.d, self.item_geom)
-        item_pos = self.d.xpos[self.item_body]
+        obs = self._observe()
+        top = obs.position[2] + obs.vertical_half_extent
+        item_pos = obs.position
         if self.item_cls == "cylinder":
             self.grasp_yaw = self._cmd_pose[1]
         else:
-            self.grasp_yaw = self._item_yaw() + np.pi / 2  # close across the item's short axis
+            self.grasp_yaw = obs.yaw + np.pi / 2  # close across the item's short axis
         self.grasp_yaw = ik.nearest_equivalent_yaw(self.grasp_yaw, self._cmd_pose[1])
         dur = self._plan([((item_pos[0], item_pos[1], top + PREGRASP_CLEARANCE), self.grasp_yaw)], CART_SPEED)
         self.timeout = dur + 2.0
@@ -284,11 +288,10 @@ class PickPlaceController:
         if self._at_goal():
             self._enter("DESCEND")
 
-    def grasp_height(self):
+    def grasp_height(self, obs):
         """TCP height for the grasp, per object class, limited by what the gripper geometry allows."""
-        g = self.item_geom
-        center = self.d.geom_xpos[g][2]
-        top = geom_highest_z(self.m, self.d, g)
+        center = obs.position[2]
+        top = center + obs.vertical_half_extent
         if self.item_cls == "folder":
             desired = top - 0.006  # pinch near the top face
         else:
@@ -298,8 +301,9 @@ class PickPlaceController:
         return max(desired, floor_limit, hand_limit)
 
     def _enter_descend(self):
-        item_pos = self.d.xpos[self.item_body]
-        self.grasp_z = self.grasp_height()
+        self.grasp_obs = self._observe()
+        item_pos = self.grasp_obs.position
+        self.grasp_z = self.grasp_height(self.grasp_obs)
         dur = self._plan([((item_pos[0], item_pos[1], self.grasp_z), self.grasp_yaw)], SLOW_SPEED)
         self.timeout = dur + 2.0
 
@@ -369,8 +373,10 @@ class PickPlaceController:
     def release_height(self):
         """TCP height at release: item just above the bin floor, but the hand body kept above the bin walls."""
         center, half = scene.slot_volume(self.m, self.d, self.slot)
-        floor_z = center[2] - half[2]
-        item_below_tcp = self.d.site_xpos[self.tcp][2] - geom_lowest_z(self.m, self.d, self.item_geom)
+        floor_z = center[2] - half[2]  # cabinet geometry is known, not perceived
+        # Item-derived part comes from perception: the believed item bottom relative to the commanded grasp height.
+        believed_bottom = self.grasp_obs.position[2] - self.grasp_obs.vertical_half_extent
+        item_below_tcp = self.grasp_z - believed_bottom
         by_item = floor_z + RELEASE_DROP + item_below_tcp
         by_walls = BIN_WALL_TOP_Z + WALL_CLEARANCE - HAND_ABOVE_TCP
         return max(by_item, by_walls)

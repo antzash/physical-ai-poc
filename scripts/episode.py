@@ -17,6 +17,7 @@ import numpy as np
 import controller as ctl
 import scene
 from logger import ROBOT_ACTOR, SYSTEM_ACTOR, CustodyLog, officer
+from perception import NoiseSpec, draw_error
 from randomise import Randomiser
 from slots import CabinetFull, SlotAllocator
 
@@ -44,6 +45,8 @@ class EpisodeResult:
     cycle_time: float
     placement_error: float | None
     params: dict
+    perception: dict  # noise spec and the episode's drawn (cached) error, for exact replay
+    final_in_slot: bool  # ground truth after settling, regardless of verdict (a failed episode can land in-slot)
 
     def to_dict(self):
         return asdict(self)
@@ -65,10 +68,13 @@ class IntakeStation:
         self.randomiser = Randomiser(model)
         self.episode_index = 0
 
-    def run_episode(self, seed, object_class=None, frame_cb=None, slot=None):
+    def run_episode(self, seed, object_class=None, frame_cb=None, slot=None, noise=NoiseSpec(), size_mult=1.0,
+                    mass_mult=1.0):
         """Run one intake. frame_cb(station, controller_or_None) is called after every physics step.
 
         `slot` forces the target slot (for exact replay of an evaluation episode: same seed + same slot).
+        `noise` perturbs only the controller's observation of the item (perception.py); all judging stays on
+        ground truth. `size_mult` / `mass_mult` scale the randomisation envelope at runtime (OOD sweeps).
         """
         m, d = self.m, self.d
         ep = self.episode_index
@@ -79,7 +85,10 @@ class IntakeStation:
         badge = BADGES[rng.integers(len(BADGES))]
 
         scene.reset_home(m, d)
-        params = self.randomiser.apply(d, seed, object_class)
+        params = self.randomiser.apply(d, seed, object_class, size_mult=size_mult, mass_mult=mass_mult)
+        # Separate stream so the perception error never perturbs the physics draws: at zero noise every episode is
+        # bit-identical to Phase 0. Drawn once here and cached for the whole attempt.
+        perception_error = draw_error(noise, np.random.default_rng([seed, 2]))
         cls = params.object_class
         item_body = scene.body_id(m, scene.item_body(cls))
         item_geom = scene.geom_id(m, scene.item_geom(cls))
@@ -126,7 +135,7 @@ class IntakeStation:
             elif ev.kind == "failed":
                 fail(ev.phase, ev.detail)
 
-        c = ctl.PickPlaceController(m, d, cls, slot, on_event=on_event)
+        c = ctl.PickPlaceController(m, d, cls, slot, on_event=on_event, perception_error=perception_error)
         t0 = d.time
         while not c.done:
             if d.time - t0 > MAX_CYCLE_TIME:
@@ -173,7 +182,12 @@ class IntakeStation:
             self.alloc.release(slot)  # the slot was never filled
         return EpisodeResult(ep, int(seed), item_id, case_id, cls, slot, success, None if success else failure_phase,
                              None if success else failure_reason, r.grasped, r.slipped, round(r.duration, 3),
-                             round(placement_error, 4) if success else None, params.to_dict())
+                             round(placement_error, 4) if success else None, params.to_dict(),
+                             {"noise": {"pos_sigma_mm": noise.pos_sigma_m * 1000,
+                                        "yaw_sigma_deg": float(np.degrees(noise.yaw_sigma_rad)),
+                                        "size_sigma_pct": noise.size_sigma_frac * 100},
+                              "error": perception_error.to_dict(), "size_mult": size_mult, "mass_mult": mass_mult},
+                             bool(inside and at_rest))
 
 
 def main():

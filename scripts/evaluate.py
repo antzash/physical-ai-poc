@@ -2,6 +2,8 @@
 
     python3 scripts/evaluate.py                     # 100 episodes, seed 0
     python3 scripts/evaluate.py --episodes 500 --seed 1000
+    python3 scripts/evaluate.py --pos-noise-mm 5 --yaw-noise-deg 5   # perception error on the controller's input
+    python3 scripts/evaluate.py --size-mult 1.5 --mass-mult 1.5      # out-of-distribution envelope
 
 Writes out/eval_<timestamp>.json (config, summary, every episode) and its own custody log, and prints a table.
 Episode i uses seed `--seed + i`. Any single episode replays exactly (same draws, same physics) with
@@ -11,6 +13,7 @@ Episode i uses seed `--seed + i`. Any single episode replays exactly (same draws
 import argparse
 import json
 import subprocess
+from pathlib import Path
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -21,6 +24,7 @@ import numpy as np
 import scene
 from controller import PHASES
 from episode import IntakeStation
+from perception import NoiseSpec
 
 Z95 = 1.959964
 
@@ -77,6 +81,10 @@ def summarise(results):
     summary["placement_error_m"] = {"mean": float(np.mean(err)), "p95": float(np.percentile(err, 95)),
                                     "max": float(np.max(err)),
                                     "note": "horizontal distance, item centre to slot centre, successful episodes"}
+    failed = [r for r in results if not r.success]
+    summary["failed_but_in_slot"] = {"k": sum(r.final_in_slot for r in failed), "n": len(failed),
+                                     "note": "failed episodes whose item nevertheless ended at rest inside the target "
+                                             "slot (e.g. dropped during INSERT). Not counted as success."}
     grasped = [r for r in results if r.grasped]
     summary["grasp_rate"] = rate(len(grasped), n)
     summary["grasp_slip"] = {**rate(sum(r.slipped for r in grasped), len(grasped)),
@@ -95,6 +103,7 @@ def print_table(summary, config):
     print("\n" + "=" * 78)
     print(f"EVALUATION  episodes={config['episodes']}  seeds {config['seed']}..{config['seed'] + config['episodes'] - 1}"
           f"  commit={config['git_commit']}  wall={config['wall_time_s']:.0f}s")
+    print(f"perception: {config['perception']}   size×{config['size_mult']:g}  mass×{config['mass_mult']:g}")
     print("=" * 78)
     print(f"{'overall success':<22}{_pct(summary['overall'])}")
     print(f"{'grasp success':<22}{_pct(summary['grasp_rate'])}")
@@ -125,35 +134,52 @@ def print_table(summary, config):
     print("=" * 78)
 
 
+def run_evaluation(episodes, seed, noise=NoiseSpec(), size_mult=1.0, mass_mult=1.0, log_path=None, quiet=True,
+                   progress=True):
+    """Run `episodes` randomised episodes with seeds seed..seed+episodes-1. Returns (results, summary, config)."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = log_path or scene.OUT_DIR / f"eval_{stamp}_custody.jsonl"
+    station = IntakeStation(log_path, echo=not quiet)
+    results = []
+    t0 = time.time()
+    for i in range(episodes):
+        r = station.run_episode(seed + i, noise=noise, size_mult=size_mult, mass_mult=mass_mult)
+        results.append(r)
+        if progress:
+            mark = "ok  " if r.success else f"FAIL {r.failure_phase}"
+            print(f"[{i + 1:4d}/{episodes}] seed {r.seed:<6} {r.object_class:<9} {r.slot}  {mark}", flush=True)
+    wall = time.time() - t0
+    chain_bad = station.log.verify()
+    config = {
+        "episodes": episodes, "seed": seed, "timestamp_utc": stamp, "git_commit": _git_commit(),
+        "mujoco_version": mujoco.__version__, "wall_time_s": wall,
+        "custody_log": str(Path(log_path).resolve().relative_to(scene.ROOT)) if str(Path(log_path).resolve()).startswith(
+            str(scene.ROOT)) else str(log_path),
+        "custody_events": len(station.log), "custody_chain_intact": chain_bad is None,
+        "grasping": "contact physics only (no weld / kinematic attachment)",
+        "perception": noise.describe(), "pos_noise_mm": noise.pos_sigma_m * 1000,
+        "yaw_noise_deg": float(np.degrees(noise.yaw_sigma_rad)), "size_noise_pct": noise.size_sigma_frac * 100,
+        "size_mult": size_mult, "mass_mult": mass_mult,
+    }
+    return results, summarise(results), config
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--quiet", action="store_true", help="suppress per-event custody log output")
+    parser.add_argument("--pos-noise-mm", type=float, default=0.0, help="per-axis σ of the controller's position error")
+    parser.add_argument("--yaw-noise-deg", type=float, default=0.0, help="σ of the controller's yaw error")
+    parser.add_argument("--size-noise-pct", type=float, default=0.0, help="per-axis σ of the size estimate error")
+    parser.add_argument("--size-mult", type=float, default=1.0, help="runtime multiplier on drawn item sizes (OOD)")
+    parser.add_argument("--mass-mult", type=float, default=1.0, help="runtime multiplier on drawn item masses (OOD)")
     args = parser.parse_args()
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_json = scene.OUT_DIR / f"eval_{stamp}.json"
-    log_path = scene.OUT_DIR / f"eval_{stamp}_custody.jsonl"
-    station = IntakeStation(log_path, echo=not args.quiet)
-
-    results = []
-    t0 = time.time()
-    for i in range(args.episodes):
-        r = station.run_episode(args.seed + i)
-        results.append(r)
-        mark = "ok  " if r.success else f"FAIL {r.failure_phase}"
-        print(f"[{i + 1:4d}/{args.episodes}] seed {r.seed:<6} {r.object_class:<9} {r.slot}  {mark}", flush=True)
-    wall = time.time() - t0
-
-    chain_bad = station.log.verify()
-    config = {
-        "episodes": args.episodes, "seed": args.seed, "timestamp_utc": stamp, "git_commit": _git_commit(),
-        "mujoco_version": mujoco.__version__, "wall_time_s": wall, "custody_log": str(log_path.relative_to(scene.ROOT)),
-        "custody_events": len(station.log), "custody_chain_intact": chain_bad is None,
-        "grasping": "contact physics only (no weld / kinematic attachment)",
-    }
-    summary = summarise(results)
+    noise = NoiseSpec(args.pos_noise_mm / 1000, float(np.radians(args.yaw_noise_deg)), args.size_noise_pct / 100)
+    results, summary, config = run_evaluation(args.episodes, args.seed, noise, args.size_mult, args.mass_mult,
+                                              quiet=args.quiet)
+    out_json = scene.OUT_DIR / f"eval_{config['timestamp_utc']}.json"
     out_json.write_text(json.dumps({"config": config, "summary": summary,
                                     "episodes": [r.to_dict() for r in results]}, indent=2))
     print_table(summary, config)
