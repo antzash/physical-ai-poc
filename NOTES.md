@@ -1,5 +1,24 @@
 # NOTES — running log of decisions, failures, open items
 
+## Status after Phase 1 (Tasks A–F complete)
+
+- **Workflow built and measured end to end.** A sealed, labelled bag is scanned from rendered pixels (Code128,
+  zxing-cpp), routed through a case record by category to one of 12 locations in three lockers on a rail, traversed
+  to, verify-scanned before release, and filed. Refusals (`REFUSED`), never guesses, for no decode, no case match, a
+  full locker or a verify mismatch/no-read.
+- **Headline safety metric:**
+  - Misfiles are **0 / 1200 with perfect pose**, but **5 / 1200 (0.4%) under pose error**. All five are physical:
+    after correct identification and routing, the bag crossed a bin divider or dropped into the neighbouring bin.
+    None was recorded as VERIFIED.
+  - **0 misreads in 3,400 episodes**, 0 verify mismatches, and 0 misreads in 700 deliberately degraded scans.
+  - The zero-misfile target is therefore met for identity but not for physical placement under pose error.
+    Remedies are identified (a taller internal divider, an in-hand pose check from the verify image, a slot-occupancy
+    sensor) and deliberately not applied during measurement.
+- **Completion:** 99.75% at zero noise; below 95% at ≈ 4.5 mm and below 80% at ≈ 8.3 mm of per-axis pose error.
+  The OOD cliff sits at ×1.25 (bags are sized close to the bins and the finger stroke).
+- **Still true:** simulation only, scripted controller, no pose-estimation model (pose error is injected), four
+  content classes, gripper-limited bag sizes, one item per episode.
+
 ## Status after Phase 0B (Tasks A–D complete)
 
 - **The headline is now a known failure boundary, not a bare 100%.** With perfect state the pipeline is reliable
@@ -727,3 +746,39 @@ GPU, and a 13 MP scanner render per episode, with Spotlight indexing `out/` on t
 - Carry tilt from the offset CoM: mean 2.9°, p95 9.3°, max 46.9° (carton mean 6.0°, garment 0.6°). Placement
   error mean 1.4 mm, p95 5.6 mm, max 31 mm; cycle time mean 19.0 s, p95 20.7 s (a rail traverse on most episodes).
 - Grasp slip in transit stays rare: 0 at zero noise, ≤ 2/200 per noisy point.
+
+## Task F — The workflow video
+
+`python3 scripts/record.py` → `out/demo_20260925T143718Z.mp4`: **101.3 s**, 1280×720, 30 fps; decodes cleanly;
+custody chain intact (17 events). Verified by extracting a contact sheet across the whole video plus full-size stills
+of the scan, verify and refusal beats.
+
+- Beats, in order:
+  1. **Room:** a camera move from wide to the working view.
+  2. **Arrival:** SUBMITTED as `PENDING-SCAN`; the overlay says the officer seals and labels and the robot moves
+     sealed bags only.
+  3. **Scan:** a freeze on a crop of the *actual* scanner frame the decoder read, with the decoded string beside it.
+  4. **Routing:** barcode → case → category → locker/slot on the panel.
+  5. **Traverse:** the camera tracks the carriage along the rail.
+  6. **Verify:** the actual wrist-camera pixels with MATCH, then release.
+  7. **Custody log:** the hash-chained record throughout.
+  8. **Refusal:** a deliberate, on-screen-labelled test item with a damaged label. Intake no-read, a re-scan from a
+     second pose, then REFUSED; the bag is left on the counter and the workflow strip flags SCAN in red.
+- Episodes: seeds 51004 (blade → CAB-B/slot_0), 51001 (carton → CAB-A/slot_0), 51000 (garment → CAB-C/slot_0),
+  chosen by destination only so all three lockers appear, never by outcome; all three filed. The refusal is seed
+  51005 with `label="damaged"`.
+- On-screen claims are read from data: "pose error σ 5 mm on the controller's input · measured: 94.0% filed at this
+  level; 5 misfiles in 2400 sweep episodes" comes from the Phase 1 sweep JSON. The overlay also states "1× real
+  time, paused at each scan", contact physics only, and one item per episode.
+- Fixes from inspecting stills:
+  - Helvetica has no "→", so the callouts showed a box and now use words.
+  - The intro callout was clipped.
+  - The camera moved from the public side (the hatch wall dominated and the arm was cut off) to inside the room
+    behind the rail.
+  - The overlay was shortened, and the scanner crop tightened.
+  - After a refusal the strip highlighted the arm's current stage instead of the stage that refused.
+- Earlier takes `demo_20260925T142219Z.mp4` and `demo_20260925T143012Z.mp4` are superseded; nothing was
+  overwritten (timestamped filenames).
+- Documentation: README rewritten around the workflow and the measured claim (misfiles first, including the
+  physical misfiles); CLAUDE.md rewritten to reflect the current repo and the project's working rules;
+  `out/ARTIFACTS.md` updated.

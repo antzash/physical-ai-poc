@@ -106,7 +106,13 @@ flagged below.
 | `p1b_label_crop.png` | Scanner pixels of the first static decode (`EV-2026-001259`) | Task B probe | `8247741` + probe |
 | `p1c_traverse_sheet.png`, `p1c_room.png`, `p1a_bags.png` | Rail traverse per phase; the room; bag close-ups | Task A/C probes | Task A/C commits |
 
+| `demo_20260925T143718Z.mp4` | **Phase 1 workflow video**, 101.3 s: scan, route, traverse, verify, file ×3 (CAB-B, CAB-A, CAB-C) and one labelled damaged-label refusal; pose error σ 5 mm | `python3 scripts/record.py` | Task F commit | 
+| `demo_20260925T143718Z_custody.jsonl` | Its custody log, 17 events, chain intact | same run | same |
+
+SHA-256 (first 16) of the video: `f27fd6d2935352be`, 19.0 MB.
+
 ### Safe to discard
 
-`_aborted_sweep_20260925T130252Z/` (the 8-worker attempt, stopped), `robustness_20260925T083234Z.json` (Phase 0B
+`demo_20260925T142219Z*`, `demo_20260925T143012Z*` (earlier takes of the Phase 1 video), `f_*`, `f2_*`, `f3_*`
+(stills from video checks), `_aborted_sweep_20260925T130252Z/` (the 8-worker attempt, stopped), `robustness_20260925T083234Z.json` (Phase 0B
 smoke), `p1d_*`, `p1e_timing*`, `p1e_replay*`, `eval_20260925T12*`/`13*` trial runs.
