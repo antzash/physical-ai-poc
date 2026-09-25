@@ -3,7 +3,9 @@
 models/panda/*
 !models/panda/evidence_room.xml
 
-out/
+# Generated artefacts stay local; the manifest describing them is committed.
+out/*
+!out/ARTIFACTS.md
 __pycache__/
 *.pyc
 .DS_Store
