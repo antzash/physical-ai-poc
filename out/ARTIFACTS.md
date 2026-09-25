@@ -70,7 +70,7 @@ flagged below.
 
 | File | What it is | Produced by | Code | Size | SHA-256 (first 16) |
 |---|---|---|---|---|---|
-| `demo_phase0b.mp4` (identical copy: `demo.mp4`) | **Phase 0B pitch video**, 85.9 s. New locker scene; the controller sees the item pose with σ 5 mm / 5° error (measured 97.5% [94.3, 98.9] at that level); 5 natural episodes (all succeed) plus the labelled fault injection | `python3 scripts/record.py --out out/demo.mp4` | Task D commit (only the default output filename changed after the run) | 14.8 MB | `9144a87369452b4e` |
+| `demo_phase0b.mp4` (identical copy: `demo.mp4`) | **Phase 0B pitch video**, 85.9 s. New locker scene; the controller sees the item pose with σ 5 mm / 5° error (measured 97.5% [94.3, 98.9] at that level); 5 natural episodes (all succeed) plus the labelled fault injection | `python3 scripts/record.py --out out/demo.mp4` | `3556a34` (Phase 0B Task D; only the default output filename changed after the run) | 14.8 MB | `9144a87369452b4e` |
 | `demo_20260925T085524Z_custody.jsonl` | Its custody log, 28 events, chain intact | same run | same | 12.7 KB | `a0bd3939c2608246` |
 | `robustness_20260925T083332Z.json` | **Robustness sweeps**: position, yaw, combined, size, OOD. 27 points × 200 episodes, every episode's parameters and drawn perception error | `python3 scripts/sweep.py` | `ed19f01` (clean) | 8.0 MB | `d9d9436b59670995` |
 | `robustness_20260925T084337Z.json` | Yaw extension 30/45/60/90°, 4 × 200 episodes | `python3 scripts/sweep.py --only yaw_wide` | `ed19f01-dirty` (only the new `SWEEPS` entry) | 1.0 MB | `b8dd8726cdb18db9` |
@@ -100,13 +100,13 @@ flagged below.
 |---|---|---|---|
 | `robustness_20260925T132202Z.json` | **Phase 1 re-measure**: baseline 5×200, position 7×200, OOD 5×200 (3,400 episodes) with per-episode params, drawn error, scans, true/decoded IDs, routed/correct/final locations | `python3 scripts/sweep.py --episodes 200 --workers 2 --only baseline position ood` | `a64184c` (stamped `-dirty`: concurrent edits the workers did not load) |
 | `sweep_20260925T132202Z/` | Per-point custody logs (all chains intact) | same run | same |
-| `p1_completion_curve.png`, `p1_outcomes_position.png`, `p1_outcomes_ood.png` | Completion vs pose error; outcome composition (filed / refused / failed / misfiled) | `python3 scripts/plot_phase1.py out/robustness_20260925T132202Z.json` | Task E commit |
-| `scan_degradation.json` | Intake read and misread rate vs blur and noise | `python3 scripts/scan_degradation.py --episodes 100` | Task E commit |
-| `p1e_misfile_cabinet.png`, `p1e_noread_wrist_cam_*.png` | Replays: a misfile (bag across the divider) and a zero-noise verify no-read (46° tilt) | ad-hoc replay | Task E commit |
+| `p1_completion_curve.png`, `p1_outcomes_position.png`, `p1_outcomes_ood.png` | Completion vs pose error; outcome composition (filed / refused / failed / misfiled) | `python3 scripts/plot_phase1.py out/robustness_20260925T132202Z.json` | `e78969a` |
+| `scan_degradation.json` | Intake read and misread rate vs blur and noise | `python3 scripts/scan_degradation.py --episodes 100` | `e78969a` |
+| `p1e_misfile_cabinet.png`, `p1e_noread_wrist_cam_*.png` | Replays: a misfile (bag across the divider) and a zero-noise verify no-read (46° tilt) | ad-hoc replay | `e78969a` |
 | `p1b_label_crop.png` | Scanner pixels of the first static decode (`EV-2026-001259`) | Task B probe | `8247741` + probe |
-| `p1c_traverse_sheet.png`, `p1c_room.png`, `p1a_bags.png` | Rail traverse per phase; the room; bag close-ups | Task A/C probes | Task A/C commits |
+| `p1c_traverse_sheet.png`, `p1c_room.png`, `p1a_bags.png` | Rail traverse per phase; the room; bag close-ups | Task A/C probes | `8247741` / `450bb9e` |
 
-| `demo_20260925T143718Z.mp4` | **Phase 1 workflow video**, 101.3 s: scan, route, traverse, verify, file ×3 (CAB-B, CAB-A, CAB-C) and one labelled damaged-label refusal; pose error σ 5 mm | `python3 scripts/record.py` | Task F commit | 
+| `demo_20260925T143718Z.mp4` | **Phase 1 workflow video**, 101.3 s: scan, route, traverse, verify, file ×3 (CAB-B, CAB-A, CAB-C) and one labelled damaged-label refusal; pose error σ 5 mm | `python3 scripts/record.py` | `0dc2a71` | 
 | `demo_20260925T143718Z_custody.jsonl` | Its custody log, 17 events, chain intact | same run | same |
 
 SHA-256 (first 16) of the video: `f27fd6d2935352be`, 19.0 MB.

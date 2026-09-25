@@ -18,6 +18,16 @@
   The OOD cliff sits at ×1.25 (bags are sized close to the bins and the finger stroke).
 - **Still true:** simulation only, scripted controller, no pose-estimation model (pose error is injected), four
   content classes, gripper-limited bag sizes, one item per episode.
+- **Provenance:**
+  - Phase 1 commits on `main` (pushed): A `8247741`, B `70a0923`, C `450bb9e`, D `358f69f`, E harness `a64184c`,
+    E results `e78969a`, F `0dc2a71`, plus this documentation update.
+  - Tags on the remote: `m0`–`m7` (Phase 0 milestones) and `phase0b` (`3556a34`, the last commit whose code runs
+    `evidence_room.xml`). The full Phase 0 milestone history is on the `milestones-backup` branch.
+  - Generated artefacts, with their commits and checksums, are listed in `out/ARTIFACTS.md` (the files themselves
+    are local only).
+- **Open decision for the next session:** whether to apply the misfile remedies (a taller internal divider between
+  slot_0/1 and slot_2/3, an in-hand pose check from the verify-scan image before release, a post-release
+  slot-occupancy check), then re-measure with the same sweep.
 
 ## Status after Phase 0B (Tasks A–D complete)
 
