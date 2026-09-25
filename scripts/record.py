@@ -155,7 +155,25 @@ class Panel:
         return img
 
 
-def overlay_sim(frame, inset, lines, banner=None):
+def project(model, data, camera, point, width, height):
+    """Pixel (u, v) of a world point in a fixed camera's image (MuJoCo cameras look along their -z axis)."""
+    cid = scene.camera_id(model, camera)
+    pc = data.cam_xmat[cid].reshape(3, 3).T @ (np.asarray(point) - data.cam_xpos[cid])
+    f = (height / 2) / np.tan(np.radians(model.cam_fovy[cid]) / 2)
+    return width / 2 + f * pc[0] / -pc[2], height / 2 - f * pc[1] / -pc[2]
+
+
+def slot_label_anchors(model, data):
+    """Where to draw each SLOT label in the cabinet inset: near the front edge of the bin, clear of the item."""
+    anchors = []
+    for i, name in enumerate(scene.SLOT_NAMES):
+        centre, half = scene.slot_volume(model, data, name)
+        point = [centre[0], centre[1] - half[1] + 0.022, centre[2] - half[2]]
+        anchors.append((i, name, project(model, data, "cabinet_cam", point, INSET_W, INSET_H)))
+    return anchors
+
+
+def overlay_sim(frame, inset, lines, banner=None, slot_anchors=(), active_slot=None):
     img = Image.fromarray(frame)
     d = ImageDraw.Draw(img, "RGBA")
     d.rounded_rectangle([12, 12, 12 + 470, 12 + 24 + 18 * (len(lines) - 1) + 8], radius=6, fill=(9, 13, 24, 190))
@@ -167,6 +185,14 @@ def overlay_sim(frame, inset, lines, banner=None):
     d.rectangle([x0, y0, x0 + INSET_W, y0 + INSET_H], outline=(255, 255, 255, 160), width=1)
     d.rectangle([x0, y0, x0 + 80, y0 + 18], fill=(9, 13, 24, 200))
     d.text((x0 + 6, y0 + 3), "CABINET", font=F["label"], fill=TEXT)
+    for i, name, (u, v) in slot_anchors:
+        label = f"SLOT {i}"
+        tw = d.textlength(label, font=F["label"])
+        bx, by = x0 + u - tw / 2 - 5, y0 + v - 8
+        active = name == active_slot
+        d.rounded_rectangle([bx, by, bx + tw + 10, by + 16], radius=4,
+                            fill=(59, 130, 246, 235) if active else (9, 13, 24, 190))
+        d.text((bx + 5, by + 2), label, font=F["label"], fill=(255, 255, 255) if active else TEXT)
     if banner:
         bw = d.textlength(banner, font=F["banner"]) + 28
         free_x0 = INSET_W + 24  # centre the banner in the space right of the cabinet inset
@@ -189,6 +215,7 @@ def main():
     m, d = station.m, station.d
     main_r = mujoco.Renderer(m, H, W)
     inset_r = mujoco.Renderer(m, INSET_H, INSET_W)
+    anchors = slot_label_anchors(m, d)  # the cabinet and camera are static, so compute once
     panel = Panel()
     writer = imageio.get_writer(args.out, fps=FPS, codec="libx264", quality=8, pixelformat="yuv420p",
                                 macro_block_size=16)
@@ -213,7 +240,7 @@ def main():
                  f"episode {state['ep']}/{len(plan)} · seed {state['seed']} · filed so far: {done}",
                  "grasping by contact physics only — no attachment / weld",
                  "one item simulated per episode: the cabinet resets between episodes"]
-        frame = overlay_sim(sim, inset, lines, state["banner"])
+        frame = overlay_sim(sim, inset, lines, state["banner"], anchors, info.get("slot_id"))
         out = Image.new("RGB", (W, H))
         out.paste(frame, (0, 0))
         out.paste(panel.draw(events, info, state["t_video"], state["chain_ok"], state["n"]), (SIM_W, 0))

@@ -416,3 +416,31 @@ Position — especially depth — is the axis to buy down: either perception bet
 tolerates it (compliant/force-guarded descent that stops on contact instead of timing out, a wider or adaptive
 approach, or a re-observe step before closing). Yaw needs nothing below ~20°. The OOD edge says the envelope has no
 headroom: a real intake counter needs either a wider gripper or a policy for refusing items that do not fit.
+
+## Task C — Make it read as an evidence room
+
+Verified by rendering `demo_cam` (`out/scene.png`, `out/c_demo_transit.png`) and `cabinet_cam`
+(`out/c_cabinet_cam_bag.png`), and a composed video frame (`out/c_test_inset.png`), and looking at each.
+
+- **Cabinet → steel locker, physics untouched.** The cabinet walls now exist twice. The Phase 0 collision boxes
+  are unchanged but moved to geom group 3 (hidden, like Menagerie's collision meshes; group has no physical effect).
+  New visual-only geoms (`contype=0 conaffinity=0 density=0`) form a thicker shell: 3 cm panels, side walls raised
+  to 0.16 m, a thicker backboard with a cap, locker doors and pull handles on the two faces the demo camera sees,
+  and a plinth. Materials are opaque institutional grey with low specularity.
+- **Not raised: the front and bin back walls** stay at 0.108 m. The 208 mm-wide hand passes over them at release
+  with ~12 mm to spare, so raising them would change the task, not the look.
+- **Floor:** the checker texture is replaced by a flat matte grey.
+- **Evidence tags:** a thin white box on each item's top face, `contype=0 conaffinity=0 density=0`. Checked in the
+  compiled model: item masses and inertias are unchanged and each item body's collision BVH is still one node
+  (MuJoCo leaves non-colliding geoms out of it). The randomiser moves the tag onto the resized item's top face each
+  episode, but **the tag's size does not scale with the item** (a small item gets a proportionally large tag).
+- **Bottle:** amber glass (`0.58 0.32 0.10 0.93`) instead of green.
+- **Slot sites:** confirmed from the render, not the XML, that the group-4 slot volumes do not appear in `demo_cam`.
+- **Slot labels:** `SLOT 0`–`SLOT 3` are drawn into the cabinet inset in `record.py`, by projecting each bin's front
+  edge through `cabinet_cam`'s real pose and field of view. The allocated slot is highlighted.
+- **Physics unchanged (strict check):** the same 100 seeds were run on the pre-Task-C scene (`15c23aa`) and the new
+  one: 100/100 on both, and **100/100 episodes bit-identical** (cycle time, placement error, slot, parameters).
+  The official `evaluate.py --episodes 100 --seed 0` gives 100/100 at zero noise, chain intact.
+- Against the Phase 0 baseline on those seeds: box, bag and folder are identical; the 29 cylinders differ (mean
+  placement error 1.75 → 2.39 mm, all still successful). That comes from Task B's release height (believed item
+  bottom), not from this task.

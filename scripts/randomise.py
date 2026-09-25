@@ -61,6 +61,8 @@ class Randomiser:
         self.m = model
         self.geoms = {c: scene.geom_id(model, scene.item_geom(c)) for c in scene.ITEM_CLASSES}
         self.bodies = {c: scene.body_id(model, scene.item_body(c)) for c in scene.ITEM_CLASSES}
+        # Visual-only evidence tags (absent from older scene files, hence optional).
+        self.tags = {c: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"item_{c}_tag") for c in scene.ITEM_CLASSES}
         self.qadr = {c: model.jnt_qposadr[scene.joint_id(model, scene.item_joint(c))] for c in scene.ITEM_CLASSES}
         self.dadr = {c: model.jnt_dofadr[scene.joint_id(model, scene.item_joint(c))] for c in scene.ITEM_CLASSES}
         self.nom_size = {c: model.geom_size[g].copy() for c, g in self.geoms.items()}
@@ -93,6 +95,10 @@ class Randomiser:
                 inertia = [mass * (bb * bb + c * c) / 3, mass * (a * a + c * c) / 3, mass * (a * a + bb * bb) / 3]
         m.body_mass[b] = mass
         m.body_inertia[b] = inertia
+        # Keep the (visual-only, fixed-size) evidence tag sitting on the resized item's top face.
+        t = self.tags[cls]
+        if t >= 0:
+            m.geom_pos[t][2] = self._rest_height(cls) + m.geom_size[t][2]
         # Derived fields that MuJoCo does NOT recompute when geom_size changes. A stale body BVH box makes the
         # collision midphase cull contacts for enlarged items, which then sink into the counter and get ejected.
         assert m.body_bvhnum[b] == 1, "item bodies must have exactly one geom"
