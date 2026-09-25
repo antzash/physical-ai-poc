@@ -1,5 +1,21 @@
 # NOTES — running log of decisions, failures, open items
 
+## Status after Phase 0B (Tasks A–D complete)
+
+- **The headline is now a known failure boundary, not a bare 100%.** With perfect state the pipeline is reliable
+  within its randomisation envelope (1000/1000 in Phase 0; 998/1000 across the Phase 0B zero-noise points).
+  With pose error on the controller's input, overall success drops below 95% at ≈ 5.8 mm, below 80% at ≈ 10.6 mm
+  and below 50% at ≈ 17.3 mm (per-axis σ). Yaw error is minor: still ≥ 95% up to ≈ 21°. Out-of-distribution
+  items fall off a cliff at ≈ ×1.1–1.4 of the size/mass envelope. Details under "Task B" below.
+- A perception seam (`scripts/perception.py`) now carries the only item state the controller may use; the evaluator
+  provably stays on ground truth (`tests/test_perception.py`).
+- The scene reads as an evidence room (grey locker, matte floor, evidence tags, amber bottle, slot labels) with
+  physics bit-identical to before.
+- The demo (`out/demo_phase0b.mp4`) runs under a stated σ 5 mm / 5° pose error and says so on screen, with the
+  success rate measured at that level.
+- Still true: no perception model, no learned policy, simulation only, four object classes. Two rare zero-noise
+  cylinder release failures are known and deliberately left unfixed during measurement (see Task B).
+
 ## Status at the end of Phase 0 (M0–M7 complete)
 
 **Works, verified by rendering, by numbers, or both:**
@@ -444,3 +460,21 @@ Verified by rendering `demo_cam` (`out/scene.png`, `out/c_demo_transit.png`) and
 - Against the Phase 0 baseline on those seeds: box, bag and folder are identical; the 29 cylinders differ (mean
   placement error 1.75 → 2.39 mm, all still successful). That comes from Task B's release height (believed item
   bottom), not from this task.
+
+## Task D — Re-record and documentation
+
+- **Video:** `python3 scripts/record.py --out out/demo.mp4` → 85.9 s, 1280×720, 30 fps; decodes cleanly with
+  ffmpeg; copied to `out/demo_phase0b.mp4`. Verified by extracting a contact sheet and full-size stills.
+- **Recorded with pose error, because the curve supports it:** the controller sees the item through `perception.py`
+  with σ 5 mm per axis + 5° yaw, the low end of the 3–10 mm band, where the measured success is 97.5% [94.3, 98.9]
+  over 200 episodes. The header states this level and success rate, looked up from the sweep JSON at record time,
+  not typed in, plus each episode's actual drawn error (e.g. −4.6, −11.7, +1.7 mm, yaw −1.3° for the bag).
+  It also states contact physics only and one item per episode.
+- Same natural seeds as Phase 0 (1007, 1008, 1002, 1001, 1004); no reselection. All five succeed under noise.
+  The sixth episode is still the labelled fault injection (fails at LIFT, FAILED event highlighted).
+- **Mistake, disclosed:** the re-record wrote to `out/demo.mp4` and overwrote the Phase 0 video, which the Task A
+  manifest listed as existing in one place only. It was regenerated from tag `m6` in a clean worktree
+  (`out/demo_phase0_m6.mp4`): the same episodes, outcomes and duration, but new wall-clock custody timestamps.
+  `record.py` now defaults to a timestamped filename so this cannot recur. Recorded in `out/ARTIFACTS.md`.
+- README rewritten around the conditions and the robustness result; `out/ARTIFACTS.md` lists the new video,
+  sweep JSONs and charts.

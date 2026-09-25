@@ -1,7 +1,11 @@
 """Record the pitch video: consecutive intake episodes with the live chain-of-custody log alongside.
 
-    python3 scripts/record.py                      # out/demo.mp4 (~85 s, 1280x720, 30 fps)
+    python3 scripts/record.py                      # out/demo_<ts>.mp4 (~86 s, 1280x720, 30 fps), σ 5 mm / 5° pose error
+    python3 scripts/record.py --pos-noise-mm 0 --yaw-noise-deg 0   # perfect-state recording
     python3 scripts/record.py --no-fault-demo      # skip the final, clearly labelled fault-injection episode
+
+The controller sees the item through perception.py with the stated noise; the overlay states the level, the success
+rate measured at that level (read from the robustness sweep JSON, never typed in), and each episode's drawn error.
 
 Frames: the left 860 px is `demo_cam` rendered offscreen by mujoco.Renderer at 1280x720 and cropped, with a
 `cabinet_cam` inset; the right 420 px is the custody panel drawn with PIL from the real log as it is written.
@@ -9,6 +13,7 @@ Playback is 1x simulated time.
 """
 
 import argparse
+import json
 from datetime import datetime, timezone
 
 import imageio.v2 as imageio
@@ -19,6 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 import scene
 from episode import IntakeStation
 from logger import verify_file
+from perception import NoiseSpec
 
 FPS = 30
 W, H = 1280, 720
@@ -30,6 +36,9 @@ INSET_W, INSET_H = 288, 162
 # Natural (unforced) seeds from the 1000-episode evaluation, one per class, plus a fault-injection episode.
 DEMO_SEEDS = [1007, 1008, 1002, 1001, 1004]
 FAULT_SEED = 1097  # a 0.80 kg box
+# Default recording condition: combined pose error at the low end of the 3-10 mm perception band (Phase 0B sweep).
+DEMO_POS_NOISE_MM = 5.0
+DEMO_YAW_NOISE_DEG = 5.0
 
 BG = (13, 19, 33)
 CARD = (27, 36, 54)
@@ -176,7 +185,9 @@ def slot_label_anchors(model, data):
 def overlay_sim(frame, inset, lines, banner=None, slot_anchors=(), active_slot=None):
     img = Image.fromarray(frame)
     d = ImageDraw.Draw(img, "RGBA")
-    d.rounded_rectangle([12, 12, 12 + 470, 12 + 24 + 18 * (len(lines) - 1) + 8], radius=6, fill=(9, 13, 24, 190))
+    box_w = max(d.textlength(lines[0], font=F["overlay"]),
+                *(d.textlength(t, font=F["overlay_s"]) for t in lines[1:])) + 22
+    d.rounded_rectangle([12, 12, 12 + box_w, 12 + 24 + 18 * (len(lines) - 1) + 8], radius=6, fill=(9, 13, 24, 190))
     d.text((22, 17), lines[0], font=F["overlay"], fill=TEXT)
     for i, line in enumerate(lines[1:]):
         d.text((22, 40 + 18 * i), line, font=F["overlay_s"], fill=MUTED)
@@ -202,15 +213,31 @@ def overlay_sim(frame, inset, lines, banner=None, slot_anchors=(), active_slot=N
     return img
 
 
+def measured_claim(pos_mm, yaw_deg):
+    """Success measured at exactly this noise level in a robustness sweep, or say that it was not measured."""
+    for path in sorted(scene.OUT_DIR.glob("robustness_*.json"), reverse=True):
+        for p in json.loads(path.read_text())["points"]:
+            pt = p["point"]
+            if pt.get("pos_mm") == pos_mm and pt.get("yaw_deg") == yaw_deg and "size_pct" not in pt:
+                o = p["summary"]["overall"]
+                if o["n"] >= 100:
+                    return (f"measured success at this level: {100 * o['rate']:.1f}% "
+                            f"[{100 * o['ci95'][0]:.1f}, {100 * o['ci95'][1]:.1f}] over {o['n']} episodes")
+    return "success at this level: not measured"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--out", default=str(scene.OUT_DIR / "demo.mp4"))
+    parser.add_argument("--out", help="output path (default: out/demo_<timestamp>.mp4, so no earlier take is overwritten)")
     parser.add_argument("--no-fault-demo", action="store_true")
     parser.add_argument("--seeds", type=int, nargs="*", default=DEMO_SEEDS)
+    parser.add_argument("--pos-noise-mm", type=float, default=DEMO_POS_NOISE_MM)
+    parser.add_argument("--yaw-noise-deg", type=float, default=DEMO_YAW_NOISE_DEG)
     args = parser.parse_args()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = scene.OUT_DIR / f"demo_{stamp}_custody.jsonl"
+    args.out = args.out or str(scene.OUT_DIR / f"demo_{stamp}.mp4")
     station = IntakeStation(log_path, echo=True)
     m, d = station.m, station.d
     main_r = mujoco.Renderer(m, H, W)
@@ -220,6 +247,12 @@ def main():
     writer = imageio.get_writer(args.out, fps=FPS, codec="libx264", quality=8, pixelformat="yuv420p",
                                 macro_block_size=16)
 
+    noise = NoiseSpec(args.pos_noise_mm / 1000, float(np.radians(args.yaw_noise_deg)))
+    if noise.is_zero:
+        perception_line = "perception: perfect state (controller reads the true item pose)"
+    else:
+        perception_line = (f"perception: controller sees item pose with σ {args.pos_noise_mm:g} mm / "
+                           f"{args.yaw_noise_deg:g}° error; {measured_claim(args.pos_noise_mm, args.yaw_noise_deg)}")
     plan = [(s, False) for s in args.seeds] + ([] if args.no_fault_demo else [(FAULT_SEED, True)])
     state = {"t_video": 0.0, "acc": 0.0, "chain_ok": True, "n": 0, "banner": None, "ep": 0, "seed": None,
              "results": [], "last": None, "ep_start_n": 0}
@@ -236,8 +269,13 @@ def main():
         info = dict(events[-1]) if len(station.log) > state["ep_start_n"] else {}
         info["phase"] = phase
         done = sum(r.success for r in state["results"])
+        err = getattr(station, "perception_error", None)
+        err_line = ("this episode's pose error: "
+                    + ", ".join(f"{v * 1000:+.1f}" for v in err.pos_offset) + " mm (x, y, z), "
+                    + f"yaw {np.degrees(err.yaw_offset):+.1f}°") if err is not None and not noise.is_zero else None
         lines = ["MuJoCo simulation · Franka Panda · 1× real time",
                  f"episode {state['ep']}/{len(plan)} · seed {state['seed']} · filed so far: {done}",
+                 perception_line] + ([err_line] if err_line else []) + [
                  "grasping by contact physics only — no attachment / weld",
                  "one item simulated per episode: the cabinet resets between episodes"]
         frame = overlay_sim(sim, inset, lines, state["banner"], anchors, info.get("slot_id"))
@@ -273,7 +311,7 @@ def main():
             # (kp=100, ~1.4 N per pad) so a heavy item cannot be held, to show how a failure is detected and logged.
             state["banner"] = "FAULT INJECTION (deliberate): gripper force cut to ~7%"
             m.actuator_gainprm[a, 0], m.actuator_biasprm[a, 1], m.actuator_biasprm[a, 2] = 100 * 0.04 / 255, -100, -10
-        res = station.run_episode(seed, frame_cb=frame_cb)
+        res = station.run_episode(seed, frame_cb=frame_cb, noise=noise)
         m.actuator_gainprm[a, 0], m.actuator_biasprm[a, 1], m.actuator_biasprm[a, 2] = saved
         state["results"].append(res)
         print(f"--> episode {i + 1}: seed {seed} {res.object_class} {res.slot} "

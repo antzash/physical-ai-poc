@@ -89,6 +89,7 @@ class IntakeStation:
         # Separate stream so the perception error never perturbs the physics draws: at zero noise every episode is
         # bit-identical to Phase 0. Drawn once here and cached for the whole attempt.
         perception_error = draw_error(noise, np.random.default_rng([seed, 2]))
+        self.perception_error = perception_error  # exposed for display (record.py); the controller gets it below
         cls = params.object_class
         item_body = scene.body_id(m, scene.item_body(cls))
         item_geom = scene.geom_id(m, scene.item_geom(cls))

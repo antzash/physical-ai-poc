@@ -17,8 +17,10 @@ flagged below.
 
 | File | What it is | Produced by | Code | Size | SHA-256 (first 16) |
 |---|---|---|---|---|---|
-| `demo.mp4` | Pitch video, 85.7 s, 1280×720, 30 fps H.264. 5 natural episodes plus 1 labelled fault injection | `python3 scripts/record.py` | `670754e` (m6) | 16.1 MB | `543e5dcdda635c9b` |
-| `demo_20260923T125828Z_custody.jsonl` | The custody log written live during that video. 28 events, chain intact, head hash `5020d00b…` | same run | `670754e` | 12.7 KB | `9a405d5679434b56` |
+| ~~`demo.mp4`~~ | **Overwritten on 2026-09-25** by the Phase 0B re-record (same filename). The original (`543e5dcdda635c9b`, 16.1 MB) survives only if it was copied out before then. See the regenerated copy on the next row | `python3 scripts/record.py` | `670754e` (m6) | — | — |
+| `demo_phase0_m6.mp4` | **Phase 0 video regenerated from tag `m6`** in a clean worktree: the same 6 episodes, outcomes and 85.7 s length. Physics and frames are deterministic; the custody-panel timestamps and hashes differ because they are wall-clock | `python3 scripts/record.py` at `m6` | `670754e` (m6) | 16.1 MB | `e3fcda7bdfd6021e` |
+| `demo_phase0_m6_custody.jsonl` | Custody log of that regeneration, 28 events, chain intact | same run | `670754e` | 12.7 KB | — |
+| `demo_20260923T125828Z_custody.jsonl` | The custody log written live during the original Phase 0 video. 28 events, chain intact, head hash `5020d00b…` | same run | `670754e` | 12.7 KB | `9a405d5679434b56` |
 | `eval_20260923T124308Z.json` | **Headline evaluation: 1000/1000, seeds 1000–1999**, with per-episode params for exact replay | `python3 scripts/evaluate.py --episodes 1000 --seed 1000 --quiet` | `e893af9` (clean) | 931 KB | `514da2427cedafcc` |
 | `eval_20260923T124308Z_custody.jsonl` | Its custody log, 5000 events, chain intact | same run | `e893af9` | 2.3 MB | `c5cb9310d35116c7` |
 | `eval_20260923T124228Z.json` | Evaluation: 100/100, seeds 0–99 | `python3 scripts/evaluate.py --episodes 100 --seed 0 --quiet` | `e893af9` (clean) | 95 KB | `01db0af03bfd1d18` |
@@ -39,10 +41,10 @@ flagged below.
 
 | File | What it is | Code |
 |---|---|---|
-| `scene.png` | demo_cam of the final Phase 0 scene | `11145da` |
+| ~~`scene.png`~~ | Re-rendered in Task C, so it now shows the Phase 0B locker scene (`b908323`). `d_phase0_regen_last.png` shows the Phase 0 look | — |
 | `m1_sites.png` | M1 scene with slot volumes and the TCP site visible. Predates the M2 backboard move | `40b0d85` (m1) |
 | `m2_contact_sheet.png` | One frame per phase of the M2 box → slot_0 cycle | `3b61622` (m2) |
-| `m6_frame_15s.png`, `m6_frame_last.png` | Stills from the final `demo.mp4` (episode boundary; the fault-injection FAILED event) | `670754e` |
+| `m6_frame_15s.png`, `m6_frame_last.png` | Stills from the original Phase 0 `demo.mp4` (episode boundary; the fault-injection FAILED event) | `670754e` |
 
 ### RL smoke-test outputs (plumbing evidence only; the policies are untrained)
 
@@ -59,3 +61,33 @@ flagged below.
 - `demo_20260923T125200Z/125250Z/125547Z_custody.jsonl`, `m6_test*`, `m6_contact_sheet.png`, `m6_frame_14s/76s/83s.png`:
   earlier takes of the video.
 - `m2_0*.png`, `m2_1*.png`, `m4_*`, `scene_topdown_cam.png`: working frames used during verification.
+
+## Phase 0B
+
+`record.py` now defaults to `out/demo_<timestamp>.mp4`, so a re-record cannot overwrite an earlier take again.
+
+### Keep
+
+| File | What it is | Produced by | Code | Size | SHA-256 (first 16) |
+|---|---|---|---|---|---|
+| `demo_phase0b.mp4` (identical copy: `demo.mp4`) | **Phase 0B pitch video**, 85.9 s. New locker scene; the controller sees the item pose with σ 5 mm / 5° error (measured 97.5% [94.3, 98.9] at that level); 5 natural episodes (all succeed) plus the labelled fault injection | `python3 scripts/record.py --out out/demo.mp4` | Task D commit (only the default output filename changed after the run) | 14.8 MB | `9144a87369452b4e` |
+| `demo_20260925T085524Z_custody.jsonl` | Its custody log, 28 events, chain intact | same run | same | 12.7 KB | `a0bd3939c2608246` |
+| `robustness_20260925T083332Z.json` | **Robustness sweeps**: position, yaw, combined, size, OOD. 27 points × 200 episodes, every episode's parameters and drawn perception error | `python3 scripts/sweep.py` | `ed19f01` (clean) | 8.0 MB | `d9d9436b59670995` |
+| `robustness_20260925T084337Z.json` | Yaw extension 30/45/60/90°, 4 × 200 episodes | `python3 scripts/sweep.py --only yaw_wide` | `ed19f01-dirty` (only the new `SWEEPS` entry) | 1.0 MB | `b8dd8726cdb18db9` |
+| `sweep_20260925T083332Z/`, `sweep_20260925T084337Z/` | Per-point custody logs of those sweeps (chains intact) | same runs | same | 13 MB / 1.6 MB | — |
+| `sweep_run.txt` | Printed progress of the main sweep | same run | `ed19f01` | 3 KB | `29622a3ad9b95200` |
+| `robustness_curve.png` | **Headline chart**: success vs position σ, per class plus overall, Wilson bands, 3–10 mm band shaded | `python3 scripts/plot_robustness.py <both jsons>` | `15c23aa` | 175 KB | `66e85ad7a3855c3c` |
+| `robustness_overview.png` | 2×2: position, yaw (incl. extension), combined, OOD | same | `15c23aa` | 541 KB | `e0f05dd8067e84da` |
+| `robustness_yaw.png`, `robustness_combined.png`, `robustness_ood.png`, `robustness_size.png` | Individual sweep charts | same | `15c23aa` | 89–200 KB | `cc1066682a37dc40` / `aa319ffeabe242f1` / `ece356d15dcf85fc` / `6d5bf73e61fb9a71` |
+| `eval_20260925T085152Z.json` | Task C zero-noise check, seeds 0–99: 100/100 | `evaluate.py --episodes 100 --seed 0 --quiet` | stamped `15c23aa-dirty`; the code equals `b908323` apart from record.py | 143 KB | `a69f271c995648d8` |
+
+### Stills from verification (useful, not essential)
+
+`b_zero_noise_failures.png` (the two zero-noise cylinder failures), `b_fail_*.png` (replayed noisy failures),
+`c_demo_transit.png`, `c_cabinet_cam_bag.png`, `c_test_inset.png` (Task C scene and slot labels), `d_frame_20s.png`,
+`d_contact_sheet.png` (Phase 0B video), `d_phase0_regen_last.png` (regenerated Phase 0 video).
+
+### Safe to discard
+
+`robustness_20260925T083234Z.json` and `sweep_20260925T083234Z/` (10-episode smoke test), `c_test.mp4`,
+`eval_20260925T083020Z*` (12-episode noise trial).
