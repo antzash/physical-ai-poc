@@ -15,7 +15,7 @@
   <visual>
     <headlight diffuse="0.3 0.3 0.3" ambient="0.18 0.18 0.18" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
-    <global azimuth="150" elevation="-25" offwidth="1280" offheight="720"/>
+    <global azimuth="150" elevation="-25" offwidth="4800" offheight="4000"/>
     <quality shadowsize="4096"/>
   </visual>
 
@@ -34,6 +34,59 @@
     <!-- Sealed evidence bags: translucent polythene outer, visible contents, white barcode label. -->
     <material name="bag_poly" rgba="0.80 0.83 0.86 0.32" specular="0.6" shininess="0.8"/>
     <material name="label_blank" rgba="0.97 0.97 0.95 1" specular="0.05"/>
+    <!-- Barcode label pool (scripts/labels.py). One label material is assigned per episode via geom_matid. -->
+    <texture name="label_00_tex" type="2d" file="labels/label_00.png"/>
+    <material name="label_00" texture="label_00_tex" specular="0.05"/>
+    <texture name="label_01_tex" type="2d" file="labels/label_01.png"/>
+    <material name="label_01" texture="label_01_tex" specular="0.05"/>
+    <texture name="label_02_tex" type="2d" file="labels/label_02.png"/>
+    <material name="label_02" texture="label_02_tex" specular="0.05"/>
+    <texture name="label_03_tex" type="2d" file="labels/label_03.png"/>
+    <material name="label_03" texture="label_03_tex" specular="0.05"/>
+    <texture name="label_04_tex" type="2d" file="labels/label_04.png"/>
+    <material name="label_04" texture="label_04_tex" specular="0.05"/>
+    <texture name="label_05_tex" type="2d" file="labels/label_05.png"/>
+    <material name="label_05" texture="label_05_tex" specular="0.05"/>
+    <texture name="label_06_tex" type="2d" file="labels/label_06.png"/>
+    <material name="label_06" texture="label_06_tex" specular="0.05"/>
+    <texture name="label_07_tex" type="2d" file="labels/label_07.png"/>
+    <material name="label_07" texture="label_07_tex" specular="0.05"/>
+    <texture name="label_08_tex" type="2d" file="labels/label_08.png"/>
+    <material name="label_08" texture="label_08_tex" specular="0.05"/>
+    <texture name="label_09_tex" type="2d" file="labels/label_09.png"/>
+    <material name="label_09" texture="label_09_tex" specular="0.05"/>
+    <texture name="label_10_tex" type="2d" file="labels/label_10.png"/>
+    <material name="label_10" texture="label_10_tex" specular="0.05"/>
+    <texture name="label_11_tex" type="2d" file="labels/label_11.png"/>
+    <material name="label_11" texture="label_11_tex" specular="0.05"/>
+    <texture name="label_12_tex" type="2d" file="labels/label_12.png"/>
+    <material name="label_12" texture="label_12_tex" specular="0.05"/>
+    <texture name="label_13_tex" type="2d" file="labels/label_13.png"/>
+    <material name="label_13" texture="label_13_tex" specular="0.05"/>
+    <texture name="label_14_tex" type="2d" file="labels/label_14.png"/>
+    <material name="label_14" texture="label_14_tex" specular="0.05"/>
+    <texture name="label_15_tex" type="2d" file="labels/label_15.png"/>
+    <material name="label_15" texture="label_15_tex" specular="0.05"/>
+    <texture name="label_16_tex" type="2d" file="labels/label_16.png"/>
+    <material name="label_16" texture="label_16_tex" specular="0.05"/>
+    <texture name="label_17_tex" type="2d" file="labels/label_17.png"/>
+    <material name="label_17" texture="label_17_tex" specular="0.05"/>
+    <texture name="label_18_tex" type="2d" file="labels/label_18.png"/>
+    <material name="label_18" texture="label_18_tex" specular="0.05"/>
+    <texture name="label_19_tex" type="2d" file="labels/label_19.png"/>
+    <material name="label_19" texture="label_19_tex" specular="0.05"/>
+    <texture name="label_20_tex" type="2d" file="labels/label_20.png"/>
+    <material name="label_20" texture="label_20_tex" specular="0.05"/>
+    <texture name="label_21_tex" type="2d" file="labels/label_21.png"/>
+    <material name="label_21" texture="label_21_tex" specular="0.05"/>
+    <texture name="label_22_tex" type="2d" file="labels/label_22.png"/>
+    <material name="label_22" texture="label_22_tex" specular="0.05"/>
+    <texture name="label_23_tex" type="2d" file="labels/label_23.png"/>
+    <material name="label_23" texture="label_23_tex" specular="0.05"/>
+    <texture name="label_unregistered_tex" type="2d" file="labels/label_unregistered.png"/>
+    <material name="label_unregistered" texture="label_unregistered_tex" specular="0.05"/>
+    <texture name="label_damaged_tex" type="2d" file="labels/label_damaged.png"/>
+    <material name="label_damaged" texture="label_damaged_tex" specular="0.05"/>
     <material name="contents_phone" rgba="0.10 0.10 0.12 1" specular="0.6" shininess="0.7"/>
     <material name="contents_blade" rgba="0.72 0.74 0.77 1" specular="0.9" shininess="0.9"/>
     <material name="contents_garment" rgba="0.20 0.26 0.46 1" specular="0.05"/>
@@ -157,28 +210,28 @@
       <freejoint name="item_phone_joint"/>
       <geom name="item_phone_geom" class="item" type="box" size="0.105 0.030 0.012" mass="0.25" material="bag_poly"/>
       <geom name="item_phone_contents" class="visual_only" size="0.036 0.024 0.006" material="contents_phone"/>
-      <geom name="item_phone_label" class="visual_only" pos="0.072 0 0.0126" size="0.028 0.026 0.0006"
+      <geom name="item_phone_label" class="visual_only" pos="0.072 0 0.0126" size="0.028 0.020 0.0006"
         material="label_blank"/>
     </body>
     <body name="item_blade" pos="0.60 0.00 0.010">
       <freejoint name="item_blade_joint"/>
       <geom name="item_blade_geom" class="item" type="box" size="0.110 0.024 0.010" mass="0.2" material="bag_poly"/>
       <geom name="item_blade_contents" class="visual_only" size="0.085 0.011 0.003" material="contents_blade"/>
-      <geom name="item_blade_label" class="visual_only" pos="0.077 0 0.0106" size="0.028 0.022 0.0006"
+      <geom name="item_blade_label" class="visual_only" pos="0.077 0 0.0106" size="0.028 0.020 0.0006"
         material="label_blank"/>
     </body>
     <body name="item_garment" pos="0.42 -0.30 0.022">
       <freejoint name="item_garment_joint"/>
       <geom name="item_garment_geom" class="item" type="box" size="0.105 0.032 0.022" mass="0.25" material="bag_poly"/>
       <geom name="item_garment_contents" class="visual_only" size="0.090 0.027 0.017" material="contents_garment"/>
-      <geom name="item_garment_label" class="visual_only" pos="0.072 0 0.0226" size="0.028 0.026 0.0006"
+      <geom name="item_garment_label" class="visual_only" pos="0.072 0 0.0226" size="0.028 0.020 0.0006"
         material="label_blank"/>
     </body>
     <body name="item_carton" pos="0.64 -0.30 0.024">
       <freejoint name="item_carton_joint"/>
       <geom name="item_carton_geom" class="item" type="box" size="0.100 0.031 0.024" mass="0.4" material="bag_poly"/>
       <geom name="item_carton_contents" class="visual_only" size="0.050 0.026 0.019" material="contents_carton"/>
-      <geom name="item_carton_label" class="visual_only" pos="0.067 0 0.0246" size="0.028 0.026 0.0006"
+      <geom name="item_carton_label" class="visual_only" pos="0.067 0 0.0246" size="0.028 0.020 0.0006"
         material="label_blank"/>
     </body>
 
@@ -188,5 +241,11 @@
     <camera name="demo_cam" pos="1.75 -1.25 1.2" mode="targetbody" target="demo_target" fovy="42"/>
     <camera name="topdown_cam" pos="0.5 -0.12 1.9" xyaxes="0 -1 0 1 0 0" fovy="22"/>
     <camera name="cabinet_cam" pos="0.3 0.22 0.85" xyaxes="1 0 0 0 0.94 0.34" fovy="40"/>
+    <!--
+      Intake scanner: fixed, looking straight down at the intake zone, rendered at 4000x3260 (scripts/scanner.py).
+      Covers every label position the pose randomisation allows (~0.44 m x 0.54 m) at 0.135 mm/px = 2.06 px per
+      Code128 module; measured decode rate on static frames: 40/40 at >= 1.65 px/module, 22/40 at 1.24.
+    -->
+    <camera name="scanner_cam" pos="0.50 -0.10 0.70" xyaxes="0 -1 0 1 0 0" fovy="34.9"/>
   </worldbody>
 </mujoco>

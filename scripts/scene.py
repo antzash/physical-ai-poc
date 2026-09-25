@@ -24,6 +24,13 @@ COUNTER_TOP_Z = 0.0
 
 # Flange-to-fingertip-pad offset in the hand frame (Franka's standard TCP offset).
 TCP_OFFSET = 0.1034
+WRIST_CAM_X = 0.075
+WRIST_CAM_ABOVE_TCP = 0.110
+WRIST_CAM_FOVY = 60.0
+WRIST_CAMS = ("wrist_cam_px", "wrist_cam_nx")
+WRIST_RES = (1280, 960)
+SCANNER_CAM = "scanner_cam"
+SCANNER_RES = (4000, 3260)
 PAD_FRICTION = [1.5, 0.05, 0.0001]
 # Gripper servo stiffness/damping on the `split` tendon (N/m, N*s/m). Menagerie ships kp=100, which squeezes only
 # ~1.4 N per pad and cannot lift 0.5 kg; the real Franka Hand is rated 70 N continuous. kp=1500 gives ~21 N per pad
@@ -39,6 +46,14 @@ def build_spec(path=SCENE_XML):
     spec.body("hand").add_site(
         name="tcp", pos=[0, 0, TCP_OFFSET], size=[0.006, 0, 0], rgba=[1, 0.1, 0.1, 0.8], group=4
     )
+    # Verify-scan wrist cameras (lower resolution than the intake scanner). The label sits at one end of the bag
+    # and either grasp yaw (180 deg apart) may be chosen, so there is one camera beyond each x-edge of the hand
+    # body (which spans +-32 mm), centred over where labels sit (label centres are 73-89 mm from the grasp centre),
+    # 110 mm above the TCP, looking straight down the hand's +z (the finger direction). At 52 mm / 83 mm the labels
+    # were cut off at the frame edge (verify 8/12); see NOTES.md, Phase 1 Task B.
+    for name, x in (("wrist_cam_px", WRIST_CAM_X), ("wrist_cam_nx", -WRIST_CAM_X)):
+        spec.body("hand").add_camera(name=name, pos=[x, 0, TCP_OFFSET - WRIST_CAM_ABOVE_TCP], quat=[0, 1, 0, 0],
+                                     fovy=WRIST_CAM_FOVY)
     # The real Franka compensates gravity in its joint controller; the Menagerie position servos do not, and sag
     # ~7 mm at the TCP under their own weight. Model the robot's internal compensation on the arm bodies only
     # (never on items, which must be carried by contact forces).

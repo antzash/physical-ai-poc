@@ -148,6 +148,13 @@ class Randomiser:
         data.qpos[q:q + 7] = [xy[0], xy[1], z, np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
         data.qvel[dv:dv + 6] = 0
 
+    def set_label(self, cls, material):
+        """World side: the officer's label on the bag. Selects a pre-generated label material (fixed texture pool)."""
+        mid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_MATERIAL, material)
+        if mid < 0:
+            raise KeyError(f"no label material {material!r}")
+        self.m.geom_matid[self.labels[cls]] = mid
+
     def apply(self, data, seed, object_class=None, size_mult=1.0, mass_mult=1.0):
         """Randomise the model and place the items. Call after resetting data to the home keyframe.
 

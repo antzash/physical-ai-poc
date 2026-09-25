@@ -521,3 +521,44 @@ simulator's true item ID; refuse and leave the item for a human. Misfile rate is
   still accept a bag tilted up to ~15°. Whether it costs success under pose error is measured in Task E. Carry tilt
   is now recorded per episode (`max_carry_tilt_deg`, ground truth) and summarised by `evaluate.py`.
 - `rl/env.py`'s scripted policy is generic again and still solves 12/12 through the action space; `check_env` passes.
+
+## Task B — The barcode, actually read
+
+### Static decode first (as instructed)
+- `scripts/labels.py` draws a real Code128 of the item ID (`EV-2026-00XXXX`) plus a human-readable line. The bars
+  come from python-barcode's module string at exactly 8 texture px per module, so the texture never limits the
+  decode. An ID encodes to **167 modules, 187 with quiet zones**. The label is 56 × 40 mm (it must fit the narrowest
+  blade bag) with the symbol spanning 52 mm, so **0.278 mm per module**.
+- The scanner covers every position a label can take (pose range plus label offset, ~0.44 × 0.54 m), looking
+  straight down from 0.70 m. First rendered frame at 4000 × 3260: plain zxing returned nothing at any
+  resolution. The crop showed a crisp, correctly oriented barcode rotated ~45°, beyond the skew a straight scanline
+  tolerates on a 52 × 26 mm symbol.
+- `scripts/scanner.py` reads omnidirectionally, from pixels only: it locates the label by bar texture (high-contrast
+  blocks), estimates the bar angle from image gradients (doubled-angle average), rotates the crop so the bars are
+  vertical, and decodes with zxing-cpp; a 15° rotation search is the fallback. **First static decode: 4000 × 3260
+  frame → `EV-2026-001259`, the ID printed on that label, first attempt, 100 ms.**
+- Measured decode vs resolution, 40 random poses per row: 1.24 px/module → 22/40; **1.65 → 40/40**; 2.06 → 40/40;
+  2.47 → 40/40. **Zero misreads at every resolution** (a read is either correct or nothing). Chosen: 4000 × 3260
+  = 2.06 px/module, ~50 ms per decode, ~100 ms per render.
+
+### The pool and the cameras
+- Label pool: 24 IDs (`EV-2026-001000` + 37·i) plus two refusal-path labels: `label_unregistered`
+  (`EV-2026-009999`, valid barcode, no case record) and `label_damaged` (a real ID with the symbol scuffed through;
+  the human-readable line survives). All are pre-generated PNGs in `models/panda/labels/` (committed), one
+  material each in the scene, selected per episode by writing `geom_matid` — the brief's recommended approach;
+  runtime `tex_data` overwriting was not needed.
+- Label assignment is a world-side act (`Randomiser.set_label`): the officer applied the label.
+- `scanner_cam`: fixed, over the intake zone, 4000 × 3260.
+- **Verify-scan wrist cameras, a pair.** Either grasp yaw (180° apart) may be chosen, so the label end can be on
+  either side of the hand. The cameras sit beyond each x-edge of the hand body, looking down the finger direction,
+  at 1280 × 960 (a tenth of the scanner's pixels). The fingers sit at the bag's centre, so they never cover the label.
+  First placement (±52 mm, 83 mm above the TCP): verify 8/12 — the images showed labels intact but **cut off at the
+  frame edge** (label centres sit 73–89 mm from the grasp centre). Moved to ±75 mm, 110 mm above the TCP: 24/24.
+
+### Scan rate (static, zero pose noise)
+- Intake, 200 randomised episodes: **200/200 correct, 0 misreads, 0 no-reads**. Damaged label: 10/10 no-read.
+  Unregistered label: 10/10 decode to `EV-2026-009999`. Verify (wrist, at the slot): 24/24.
+- **Caveat:** MuJoCo's renderer is idealised (no blur, glare, motion, print defects or dirt), so 100% is a
+  simulation ceiling, not a field read rate. Read rate under pose error and an image-degradation check follow in
+  Task E.
+- The verify-scan-before-release behaviour (B3) and every refusal path live in the state machine (Task D).

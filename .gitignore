@@ -3,6 +3,7 @@
 models/panda/*
 !models/panda/evidence_room.xml
 !models/panda/evidence_intake.xml
+!models/panda/labels/
 
 # Generated artefacts stay local; the manifest describing them is committed.
 out/*
